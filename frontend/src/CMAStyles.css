@@ -1,0 +1,2227 @@
+:root {
+  --navy: #1a3a6b;
+  --navy2: #2251a3;
+  --gold: #c9a84c;
+  --gold2: #e8c96a;
+  --bg: #f4f6fb;
+  --card: #ffffff;
+  --sidebar-w: 260px;
+  --text: #1a1a2e;
+  --text2: #5a6478;
+  --text3: #94a0b4;
+  --border: #e2e8f0;
+  --radius: 12px;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.07);
+  --green: #16a34a;
+  --red: #dc2626;
+  --amber: #d97706;
+  --blue: #2563eb;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body,
+input,
+select,
+textarea,
+button {
+  font-family: var(--font-sans);
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+/* App Layout */
+.cma-app {
+  display: flex;
+  min-height: 100vh;
+}
+
+.cma-app.sidebar-collapsed {
+  --sidebar-w: 78px;
+}
+
+.cma-main-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  margin-left: var(--sidebar-w);
+  min-width: 0;
+  transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.cma-app.sidebar-collapsed .cma-main-wrap {
+  margin-left: 78px !important;
+}
+
+.cma-main {
+  flex: 1;
+  padding-top: 60px;
+  min-height: calc(100vh - 60px);
+  min-width: 0;
+}
+
+.cma-page {
+  padding: 24px;
+  animation: fadeIn 0.25s ease;
+}
+
+/* ════════════════════════════════════════════════
+   GLOBAL ANIMATION SYSTEM
+   ════════════════════════════════════════════════ */
+
+/* ── Keyframes ── */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeInFast {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes navbarSlide {
+  0% {
+    background-position: 200% 0;
+    opacity: 1;
+  }
+
+  80% {
+    background-position: -50% 0;
+    opacity: 1;
+  }
+
+  100% {
+    background-position: -200% 0;
+    opacity: 0;
+  }
+}
+
+@keyframes spinSlow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: .5;
+  }
+}
+
+/* ── Page Wrapper Animation ── */
+/* Every page gets a smooth entrance automatically */
+.cma-main>div {
+  animation: fadeIn 0.22s ease both;
+}
+
+/* ── Table Row Stagger Animations ── */
+/* All tbody rows across the app get a stagger fade-in */
+tbody tr {
+  animation: fadeInFast 0.25s ease both;
+}
+
+tbody tr:nth-child(1) {
+  animation-delay: 20ms;
+}
+
+tbody tr:nth-child(2) {
+  animation-delay: 40ms;
+}
+
+tbody tr:nth-child(3) {
+  animation-delay: 60ms;
+}
+
+tbody tr:nth-child(4) {
+  animation-delay: 80ms;
+}
+
+tbody tr:nth-child(5) {
+  animation-delay: 100ms;
+}
+
+tbody tr:nth-child(6) {
+  animation-delay: 120ms;
+}
+
+tbody tr:nth-child(7) {
+  animation-delay: 140ms;
+}
+
+tbody tr:nth-child(8) {
+  animation-delay: 160ms;
+}
+
+tbody tr:nth-child(9) {
+  animation-delay: 180ms;
+}
+
+tbody tr:nth-child(10) {
+  animation-delay: 200ms;
+}
+
+tbody tr:nth-child(n+11) {
+  animation-delay: 210ms;
+}
+
+/* ── Global Shimmer Skeleton Utility ── */
+.skeleton {
+  background: linear-gradient(90deg, #f0f4f8 25%, #e2e8f0 50%, #f0f4f8 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+}
+
+.skeleton-row td div,
+td .shimmer-block {
+  height: 11px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #f0f4f8 25%, #e2e8f0 50%, #f0f4f8 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+/* ── Card / Panel Animations ── */
+.stat-card,
+.card {
+  animation: fadeInFast 0.3s ease both;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.stat-card:hover {
+  box-shadow: 0 6px 24px rgba(26, 58, 107, 0.12) !important;
+  transform: translateY(-2px);
+}
+
+/* ── Button Micro-interactions ── */
+.btn,
+button[class*="btn"] {
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.btn:active,
+button[class*="btn"]:active {
+  transform: scale(0.97);
+}
+
+.btn-primary:hover,
+button.btn-primary:hover {
+  filter: brightness(1.08);
+  box-shadow: 0 4px 14px rgba(26, 58, 107, 0.3);
+}
+
+/* ── Modal Entrance ── */
+.modal-content,
+[class*="modal"]>div,
+[class*="user-admin-modal"] {
+  animation: scaleIn 0.2s cubic-bezier(0.34, 1.26, 0.64, 1) both;
+}
+
+/* ── Table Row Hover Transition ── */
+tbody tr {
+  transition: background 0.12s ease !important;
+}
+
+/* ── Smooth Input Focus ── */
+.form-control,
+input[class*="form"],
+select[class*="form"] {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+
+/* ── Nav Item Click Ripple ── */
+.nav-item {
+  position: relative;
+  overflow: hidden;
+}
+
+.nav-item::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0);
+  transition: background 0.15s ease;
+}
+
+.nav-item:active::after {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ── Sidebar Active Item Smooth Transition ── */
+.nav-item {
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.nav-icon-wrap {
+  transition: all 0.18s ease !important;
+}
+
+/* Stats Grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 18px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  font-weight: 500;
+}
+
+.stat-value {
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 6px 0 4px;
+}
+
+.stat-change {
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stat-change.up {
+  color: var(--green);
+}
+
+.stat-change.down {
+  color: var(--red);
+}
+
+.stat-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  float: right;
+  margin-top: -4px;
+}
+
+.si-blue {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.si-green {
+  background: #f0fdf4;
+  color: #16a34a;
+}
+
+.si-amber {
+  background: #fffbeb;
+  color: #d97706;
+}
+
+.si-red {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.si-teal {
+  background: #f0fdfa;
+  color: #0d9488;
+}
+
+/* Cards */
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.card-body {
+  padding: 18px;
+}
+
+/* Tables */
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+th {
+  text-align: left;
+  padding: 9px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  background: #f8fafc;
+  border-bottom: 1px solid var(--border);
+}
+
+td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+tr:hover td {
+  background: #fafbff;
+}
+
+/* Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.badge-green {
+  background: #f0fdf4;
+  color: #16a34a;
+}
+
+.badge-red {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.badge-amber {
+  background: #fffbeb;
+  color: #d97706;
+}
+
+.badge-blue {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.badge-gray {
+  background: #f8fafc;
+  color: #64748b;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: 0.2s;
+  font-family: inherit;
+}
+
+.btn-primary {
+  background: var(--navy);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: var(--navy2);
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  background: var(--red);
+  color: #fff;
+  transition: 0.2s;
+}
+
+.btn-danger:hover {
+  background: #b91c1c;
+}
+
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text2);
+}
+
+.btn-outline:hover {
+  background: var(--bg);
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.btn-group {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Forms */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.form-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text2);
+}
+
+.form-control {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--card);
+  transition: 0.2s;
+  width: 100%;
+}
+
+.form-control:focus {
+  outline: none;
+  border-color: var(--navy);
+  box-shadow: 0 0 0 3px rgba(26, 58, 107, 0.1);
+}
+
+.modal-content {
+  background: white;
+  border-radius: 16px;
+  width: min(100%, 700px);
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.14);
+}
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  z-index: 1200;
+}
+
+.confirm-dialog {
+  width: min(100%, 420px);
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.18);
+}
+
+.confirm-dialog h3 {
+  margin: 0 0 14px;
+  font-size: 18px;
+  color: var(--text);
+}
+
+.confirm-dialog p {
+  margin: 0 0 24px;
+  color: var(--text2);
+  line-height: 1.6;
+  font-size: 14px;
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 18px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.close-btn {
+  border: none;
+  background: transparent;
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 8px;
+  border-radius: 10px;
+}
+
+.close-btn:hover {
+  background: var(--bg);
+}
+
+.modal-body {
+  padding: 18px;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 18px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.btn-gold {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  background: #d97706;
+  color: #fff;
+}
+
+.btn-gold:hover {
+  background: #b45309;
+}
+
+.workflow-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.wf-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  width: 76px;
+}
+
+.wf-step-circle {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f8fafc;
+  color: var(--text2);
+  margin-bottom: 8px;
+}
+
+.wf-step.active .wf-step-circle {
+  background: var(--navy);
+  color: #fff;
+  border-color: var(--navy);
+}
+
+.wf-step.done .wf-step-circle {
+  background: #d1fae5;
+  color: #166534;
+  border-color: #a7f3d0;
+}
+
+.wf-step-label {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--text2);
+}
+
+.wf-connector {
+  flex: 1;
+  height: 2px;
+  background: #e2e8f0;
+  margin-top: 16px;
+}
+
+.wf-connector.done {
+  background: #34d399;
+}
+
+.pending-steps {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+
+.pending-steps-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 14px;
+}
+
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.step-item:last-child {
+  border-bottom: none;
+}
+
+.step-num {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #eef2ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.step-done .step-num {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.step-text {
+  font-size: 13px;
+  color: var(--text2);
+}
+
+.pending-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.pending-card-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text3);
+  margin-top: 10px;
+}
+
+.pending-card-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.pending-card-status.pending {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.pending-card-status.dgm {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.pending-card-status.legal {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.pending-card-status.closed {
+  background: #dcfce7;
+  color: #166534;
+}
+
+/* Two Column Layout */
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+/* Daily Activities */
+.daily-activity-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px
+}
+
+.daily-activity-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: flex-end
+}
+
+.daily-activity-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text2);
+  margin-bottom: 6px
+}
+
+.daily-activity-textarea {
+  min-height: 92px;
+  resize: vertical
+}
+
+.daily-activity-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 10px
+}
+
+.daily-activity-list {
+  margin-top: 12px
+}
+
+.daily-activity-day {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--navy);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin: 18px 0 10px
+}
+
+.daily-activity-item {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: var(--card)
+}
+
+.daily-activity-item-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap
+}
+
+.daily-activity-text {
+  margin-top: 6px;
+  color: var(--text2);
+  font-size: 13px;
+  line-height: 1.5
+}
+
+.daily-activity-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-weight: 800;
+  font-size: 11px;
+  background: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #dbeafe
+}
+
+.daily-activity-pill.gray {
+  background: #f8fafc;
+  color: #64748b;
+  border-color: var(--border)
+}
+
+.daily-activity-pill.green {
+  background: #f0fdf4;
+  color: #16a34a;
+  border-color: #bbf7d0
+}
+
+.daily-activity-pill.amber {
+  background: #fffbeb;
+  color: #d97706;
+  border-color: #fde68a
+}
+
+/* Timeline */
+.timeline {
+  padding-left: 18px;
+  border-left: 2px solid var(--border);
+}
+
+.timeline-item {
+  position: relative;
+  padding: 0 0 18px 18px;
+}
+
+.timeline-dot {
+  position: absolute;
+  left: -23px;
+  top: 4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--navy);
+  border: 2px solid var(--card);
+}
+
+.timeline-date {
+  font-size: 11px;
+  color: var(--text3);
+  margin-bottom: 3px;
+}
+
+.timeline-text {
+  font-size: 13px;
+  color: var(--text2);
+}
+
+/* Page Header Banner */
+.page-header-banner {
+  background: linear-gradient(135deg, var(--navy) 0%, var(--navy2) 100%);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  margin-bottom: 22px;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.page-header-banner .title {
+  font-family: 'Playfair Display', serif;
+  font-size: 18px;
+  color: #fff;
+  margin-bottom: 4px;
+}
+
+.page-header-banner .sub {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+/* Mobile */
+@media (max-width: 900px) {
+  .two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .cma-main-wrap {
+    margin-left: 0;
+  }
+
+  .cma-page {
+    padding: 14px;
+  }
+
+  .stats-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Modal Overlay */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  width: 90%;
+  max-width: 500px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateY(-50px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.modal-content h3 {
+  margin: 0 0 20px 0;
+  font-size: 18px;
+  color: var(--text);
+}
+
+.modal-content form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal-content input,
+.modal-content textarea,
+.modal-content select {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  background: white;
+  color: var(--text);
+}
+
+.modal-content input:focus,
+.modal-content textarea:focus,
+.modal-content select:focus {
+  outline: none;
+  border-color: var(--navy);
+  box-shadow: 0 0 0 3px rgba(26, 58, 107, 0.1);
+}
+
+/* Page Header */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 15px;
+}
+
+.page-header h2 {
+  font-size: 22px;
+  color: var(--text);
+}
+
+/* Filter Section */
+.filter-section {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.filter-section select,
+.filter-section input {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+/* Buttons */
+.btn-primary,
+.btn-secondary,
+.btn-success {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: 0.2s;
+  font-family: inherit;
+}
+
+.btn-primary {
+  background: var(--navy);
+  color: white;
+}
+
+.btn-primary:hover {
+  background: var(--navy2);
+}
+
+.btn-secondary {
+  background: var(--border);
+  color: var(--text);
+}
+
+.btn-secondary:hover {
+  background: #d4dce8;
+}
+
+.btn-success {
+  background: var(--green);
+  color: white;
+}
+
+.btn-success:hover {
+  background: #15803d;
+}
+
+.btn-small {
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--navy);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-small:hover {
+  background: var(--navy2);
+}
+
+/* Table Responsive */
+.table-responsive {
+  overflow-x: auto;
+}
+
+.cma-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: white;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.cma-table thead {
+  background: #f8fafc;
+  border-bottom: 2px solid var(--border);
+}
+
+.cma-table th {
+  padding: 8px 10px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text3);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.cma-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11.5px;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.cma-table tr:hover {
+  background: #f8fafc;
+}
+
+.cma-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* Badges */
+.badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.badge-blue {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.badge-green {
+  background: #f0fdf4;
+  color: #16a34a;
+}
+
+.badge-amber {
+  background: #fffbeb;
+  color: #d97706;
+}
+
+.badge-red {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+/* Print Styles */
+@media print {
+
+  .modal-overlay,
+  .btn-primary,
+  .btn-secondary,
+  button,
+  .page-header {
+    display: none !important;
+  }
+
+  .cma-page {
+    padding: 0;
+  }
+
+  .cma-table {
+    box-shadow: none;
+    border: 1px solid #ccc;
+  }
+
+  .cma-table th {
+    background: white;
+    border: 1px solid #ccc;
+  }
+
+  .cma-table td {
+    border: 1px solid #ccc;
+  }
+
+  body {
+    background: white;
+  }
+}
+
+
+:root {
+  --cma-table-fixed-header-h: 44px;
+  --cma-table-fixed-pad-x: 12px;
+  --cma-table-fixed-pad-y: 10px;
+}
+
+/* Fixed-size professional table styling
+   Use together with overflow-x:auto wrapper.
+*/
+.cma-table--fixed {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.cma-table--fixed thead tr th {
+  height: var(--cma-table-fixed-header-h);
+  max-height: var(--cma-table-fixed-header-h);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cma-table--fixed th,
+.cma-table--fixed td {
+  padding: var(--cma-table-fixed-pad-y) var(--cma-table-fixed-pad-x);
+  vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cma-table--fixed tbody tr:hover td {
+  background: #fafbff;
+}
+
+/* Optional: nice focus/outline if you later add keyboard support */
+.cma-table--fixed button {
+  border-radius: 8px;
+}
+
+/* Login page styling (kept here so Login.jsx matches original visuals) */
+
+.cma-login-root {
+  min-height: 100vh;
+  font-family: var(--font-sans);
+  background: #0f1f3d;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+.cma-login-root::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 0%, rgba(0, 121, 107, 0.18) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 50% at 80% 100%, rgba(26, 58, 107, 0.35) 0%, transparent 60%);
+  pointer-events: none;
+}
+
+.grid-overlay {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 48px 48px;
+  pointer-events: none;
+}
+
+.login-topbar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 40px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.login-topbar-logo {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.logo-emblem {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.15), 0 2px 8px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  padding: 2px;
+}
+
+.logo-emblem img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.logo-text-main {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.02em;
+}
+
+.logo-text-sub {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.topbar-badge {
+  font-size: 11px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  letter-spacing: 0.05em;
+}
+
+.login-main {
+  position: relative;
+  z-index: 2;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 400px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  padding: 40px 32px;
+  backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
+}
+
+.login-card-header {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.login-card-emblem {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 18px;
+  border-radius: 50%;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.15), 0 4px 14px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  padding: 3px;
+}
+
+.login-card-emblem img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.login-card-header h1 {
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.login-card-header p {
+  margin-top: 6px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.4);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+
+.field-block {
+  margin-bottom: 18px;
+}
+
+.text-input {
+  width: 100%;
+  padding: 13px 16px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  color: #fff;
+  font-size: 15px;
+  font-family: var(--font-sans);
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.text-input::placeholder {
+  color: rgba(255, 255, 255, 0.2);
+}
+
+.text-input:focus {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.pw-field-wrap {
+  position: relative;
+}
+
+.pw-input {
+  width: 100%;
+  padding: 13px 44px 13px 16px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  color: #fff;
+  font-size: 15px;
+  font-family: var(--font-sans);
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+  letter-spacing: 0.05em;
+}
+
+.pw-input::placeholder {
+  color: rgba(255, 255, 255, 0.2);
+}
+
+.pw-input:focus {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.pw-toggle {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  font-size: 15px;
+  padding: 0;
+  transition: color 0.15s;
+}
+
+.pw-toggle:hover {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.pw-error {
+  font-size: 12px;
+  color: #f87171;
+  margin: -6px 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pw-submit-btn {
+  width: 100%;
+  padding: 14px;
+  border-radius: 10px;
+  border: none;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: opacity 0.15s, transform 0.1s;
+  letter-spacing: 0.02em;
+  margin-top: 4px;
+  background: linear-gradient(135deg, #1a3a6b 0%, #00796b 100%);
+}
+
+.pw-submit-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.pw-submit-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.login-footer {
+  position: relative;
+  z-index: 2;
+  text-align: center;
+  padding: 20px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.2);
+  letter-spacing: 0.04em;
+}
+
+/* Modern Dashboard Pending Module Cards */
+.dashboard-pending-card {
+  background-color: var(--card);
+  border-radius: 12px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+}
+
+.dashboard-pending-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.07), 0 4px 8px rgba(0, 0, 0, 0.03);
+}
+
+.dashboard-pending-card.mc-card:hover {
+  border-color: #1a3a6b;
+}
+
+.dashboard-pending-card.mcom-card:hover {
+  border-color: #00796b;
+}
+
+.dashboard-pending-card.cfiles-card:hover {
+  border-color: #f57c00;
+}
+
+/* Table Zoom / Fullscreen Mode */
+.cma-table-card-container.table-fullscreen-mode,
+.table-fullscreen-mode {
+  position: fixed !important;
+  top: 60px !important;
+  left: var(--sidebar-w) !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: calc(100vw - var(--sidebar-w)) !important;
+  height: calc(100vh - 60px) !important;
+  max-width: calc(100vw - var(--sidebar-w)) !important;
+  max-height: calc(100vh - 60px) !important;
+  z-index: 45 !important;
+  border-radius: 0 !important;
+  margin: 0 !important;
+  padding: 24px 32px !important;
+  background: var(--card) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  box-shadow: none !important;
+  border: none !important;
+  transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.cma-app.sidebar-collapsed .cma-table-card-container.table-fullscreen-mode,
+.cma-app.sidebar-collapsed .table-fullscreen-mode {
+  left: 78px !important;
+  width: calc(100vw - 78px) !important;
+  max-width: calc(100vw - 78px) !important;
+}
+
+.table-fullscreen-mode .mc-table-wrapper,
+.table-fullscreen-mode>div[style*="max-height"],
+.table-fullscreen-mode>div[style*="maxHeight"],
+.table-fullscreen-mode>div[style*="overflow"] {
+  max-height: calc(100vh - 180px) !important;
+  height: calc(100vh - 180px) !important;
+  flex: 1 !important;
+}
+
+.table-fullscreen-mode table {
+  width: 100% !important;
+}
+
+/* ==========================================================================
+   UNIFIED PREMIUM TABLE DESIGN SYSTEM (Inspired by Modern Enterprise UI)
+   Applies identically across MC Management, M.Com, C-Files, Complaints, Records
+   ========================================================================== */
+
+/* 1. Smooth Fade-in & Modern Card Container for ALL Tables */
+.mc-table-wrapper,
+.cma-table-card-container,
+.ol-table-wrapper,
+.of-table-wrapper,
+.user-admin-table-wrapper,
+.discussions-table-wrapper {
+  background: #ffffff !important;
+  border-radius: 12px !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.03), 0 1px 3px rgba(0, 0, 0, 0.02) !important;
+  animation: cmaTableFadeIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+  transition: box-shadow 0.25s ease, border-color 0.25s ease !important;
+}
+
+@keyframes cmaTableFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 2. Unified Table Core Structure */
+.mc-table-wrapper table,
+.cma-table-card-container table,
+.ol-table,
+.of-table,
+.user-admin-table,
+table.mc-table,
+.cma-main table,
+.cma-main-wrap table {
+  width: 100% !important;
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  font-family: var(--font-sans) !important;
+}
+
+/* 3. Identical Table Header Styling (thead tr th) */
+.mc-table-wrapper thead tr th,
+.cma-table-card-container thead tr th,
+table.mc-table thead tr th,
+.ol-table thead tr th,
+.of-table thead tr th,
+.user-admin-table thead tr th,
+.cma-main thead tr th,
+.mc-th,
+.mc-th-actions {
+  background-color: #f8fafc !important;
+  color: #475569 !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.5px !important;
+  padding: 8px 10px !important;
+  border-bottom: 2px solid #e2e8f0 !important;
+  border-right: 1px solid #cbd5e1 !important;
+  text-align: left !important;
+  white-space: nowrap !important;
+  word-break: normal !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  transition: background-color 0.2s ease, color 0.2s ease !important;
+}
+
+/* Ensure Sticky Headers match background perfectly and sit above scrolling content */
+.mc-table-wrapper thead tr th[style*="sticky"],
+.cma-table-card-container thead tr th[style*="sticky"],
+.cma-main thead tr th[style*="sticky"],
+table.mc-table thead tr th[style*="sticky"],
+.ol-table thead tr th[style*="sticky"],
+.of-table thead tr th[style*="sticky"],
+.user-admin-table thead tr th[style*="sticky"],
+.mc-th-actions {
+  background-color: #f8fafc !important;
+  z-index: 30 !important;
+  background-clip: padding-box !important;
+}
+
+/* 4. Unified Interactive Row Styles */
+.mc-table-wrapper tbody tr,
+.cma-table-card-container tbody tr,
+table.mc-table tbody tr,
+.ol-table tbody tr,
+.of-table tbody tr,
+.user-admin-table tbody tr,
+.cma-main tbody tr {
+  transition: background-color 0.18s cubic-bezier(0.4, 0, 0.2, 1), transform 0.15s ease, box-shadow 0.2s ease !important;
+  cursor: default !important;
+}
+
+/* 5. Smooth Row Hover Transition (Matches flight log reference) */
+.mc-table-wrapper tbody tr:hover,
+.cma-table-card-container tbody tr:hover,
+table.mc-table tbody tr:hover,
+.ol-table tbody tr:hover,
+.of-table tbody tr:hover,
+.user-admin-table tbody tr:hover,
+.cma-main tbody tr:hover {
+  background-color: #f8fafc !important;
+}
+
+/* Ensure sticky cells (like Actions & Status on right) also change background on row hover! */
+.mc-table-wrapper tbody tr:hover td,
+.cma-table-card-container tbody tr:hover td,
+table.mc-table tbody tr:hover td,
+.ol-table tbody tr:hover td,
+.of-table tbody tr:hover td,
+.user-admin-table tbody tr:hover td,
+.cma-main tbody tr:hover td,
+.mc-table-wrapper tbody tr:hover .mc-td-actions,
+.cma-table-card-container tbody tr:hover td[style*="sticky"],
+.cma-main tbody tr:hover td[style*="sticky"] {
+  background-color: #f8fafc !important;
+}
+
+/* 6. Identical Table Cell Styling (tbody tr td) */
+.mc-table-wrapper tbody tr td,
+.cma-table-card-container tbody tr td,
+table.mc-table tbody tr td,
+.ol-table tbody tr td,
+.of-table tbody tr td,
+.user-admin-table tbody tr td,
+.cma-main tbody tr td,
+.mc-cell,
+.mc-td-actions {
+  padding: 8px 10px !important;
+  font-size: 11.5px !important;
+  color: #1e293b !important;
+  font-weight: 500 !important;
+  vertical-align: middle !important;
+  white-space: nowrap !important;
+  word-break: normal !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  border-bottom: 1px solid #f1f5f9 !important;
+  border-right: 1px solid #e2e8f0 !important;
+  transition: background-color 0.18s ease !important;
+}
+
+/* Ensure sticky cells in body have solid white background by default and high z-index so text underneath doesn't show through */
+.mc-table-wrapper tbody tr td[style*="sticky"],
+.cma-table-card-container tbody tr td[style*="sticky"],
+.cma-main tbody tr td[style*="sticky"],
+.mc-td-actions {
+  background-color: #ffffff !important;
+  z-index: 10 !important;
+  white-space: nowrap !important;
+  word-break: normal !important;
+  background-clip: padding-box !important;
+}
+
+/* Guaranteed Prominent Divider Line on Sticky Status Column (Left edge of sticky right panel) */
+.mc-table-wrapper thead tr th.mc-th-status,
+.cma-table-card-container thead tr th.mc-th-status,
+.cma-main thead tr th.mc-th-status,
+table.mc-table thead tr th.mc-th-status,
+th.mc-th-status,
+th[style*="right: 209px"],
+th[style*="right: 210px"] {
+  position: sticky !important;
+  right: 209px !important;
+  border-left: 1px solid #cbd5e1 !important;
+  box-shadow: none !important;
+  z-index: 30 !important;
+  background-color: #f8fafc !important;
+  background-clip: padding-box !important;
+}
+
+.mc-table-wrapper tbody tr td.mc-td-status,
+.cma-table-card-container tbody tr td.mc-td-status,
+.cma-main tbody tr td.mc-td-status,
+table.mc-table tbody tr td.mc-td-status,
+td.mc-td-status,
+td[style*="right: 209px"],
+td[style*="right: 210px"] {
+  position: sticky !important;
+  right: 209px !important;
+  border-left: 1px solid #e2e8f0 !important;
+  box-shadow: none !important;
+  z-index: 10 !important;
+  background-color: #ffffff !important;
+  background-clip: padding-box !important;
+}
+
+th[style*="right: 150px"] {
+  position: sticky !important;
+  right: 150px !important;
+  border-left: 1px solid #cbd5e1 !important;
+  box-shadow: none !important;
+  z-index: 30 !important;
+  background-color: #f8fafc !important;
+  background-clip: padding-box !important;
+}
+
+td[style*="right: 150px"] {
+  position: sticky !important;
+  right: 150px !important;
+  border-left: 1px solid #e2e8f0 !important;
+  box-shadow: none !important;
+  z-index: 10 !important;
+  background-color: #ffffff !important;
+  background-clip: padding-box !important;
+}
+
+/* On hover, keep the border and shadow while changing background */
+.mc-table-wrapper tbody tr:hover td.mc-td-status,
+.cma-table-card-container tbody tr:hover td.mc-td-status,
+.cma-main tbody tr:hover td.mc-td-status,
+table.mc-table tbody tr:hover td.mc-td-status,
+tbody tr:hover td.mc-td-status,
+tbody tr:hover td[style*="right: 209px"],
+tbody tr:hover td[style*="right: 210px"],
+tbody tr:hover td[style*="right: 150px"] {
+  background-color: #f8fafc !important;
+  border-left: 1px solid #e2e8f0 !important;
+  box-shadow: none !important;
+}
+
+/* Guaranteed Prominent Divider Line on Sticky Actions Column (Both Status and Actions lines always fixed) */
+.mc-table-wrapper thead tr th.mc-th-actions,
+.cma-table-card-container thead tr th.mc-th-actions,
+.cma-main thead tr th.mc-th-actions,
+table.mc-table thead tr th.mc-th-actions,
+th.mc-th-actions,
+th[style*="right: 0"],
+th[style*="right: 0px"] {
+  position: sticky !important;
+  right: 0 !important;
+  border-left: 1px solid #cbd5e1 !important;
+  box-shadow: none !important;
+  z-index: 30 !important;
+  background-color: #f8fafc !important;
+  background-clip: padding-box !important;
+}
+
+.mc-table-wrapper tbody tr td.mc-td-actions,
+.cma-table-card-container tbody tr td.mc-td-actions,
+.cma-main tbody tr td.mc-td-actions,
+table.mc-table tbody tr td.mc-td-actions,
+td.mc-td-actions,
+td[style*="right: 0"],
+td[style*="right: 0px"] {
+  position: sticky !important;
+  right: 0 !important;
+  border-left: 1px solid #e2e8f0 !important;
+  box-shadow: none !important;
+  z-index: 10 !important;
+  background-color: #ffffff !important;
+  background-clip: padding-box !important;
+}
+
+.mc-table-wrapper tbody tr:hover td.mc-td-actions,
+.cma-table-card-container tbody tr:hover td.mc-td-actions,
+.cma-main tbody tr:hover td.mc-td-actions,
+table.mc-table tbody tr:hover td.mc-td-actions,
+tbody tr:hover td.mc-td-actions,
+tbody tr:hover td[style*="right: 0"],
+tbody tr:hover td[style*="right: 0px"] {
+  background-color: #f8fafc !important;
+  border-left: 1px solid #e2e8f0 !important;
+  box-shadow: none !important;
+}
+
+
+/* Vertical divider line in the middle of action buttons */
+.mc-td-actions button+button,
+.mc-td-actions div>button+button,
+.cma-table-card-container td[style*="sticky"] button+button,
+.cma-table-card-container td[style*="sticky"] div>button+button,
+.cma-main td[style*="sticky"] button+button,
+.cma-main td:last-child button+button {
+  position: relative !important;
+  margin-left: 5px !important;
+  padding-left: 6px !important;
+}
+
+.mc-td-actions button+button::before,
+.mc-td-actions div>button+button::before,
+.cma-table-card-container td[style*="sticky"] button+button::before,
+.cma-table-card-container td[style*="sticky"] div>button+button::before,
+.cma-main td[style*="sticky"] button+button::before,
+.cma-main td:last-child button+button::before {
+  content: "" !important;
+  position: absolute !important;
+  left: 0 !important;
+  top: 15% !important;
+  height: 70% !important;
+  width: 1px !important;
+  background-color: #cbd5e1 !important;
+}
+
+.mc-table-wrapper thead tr th[style*="sticky"],
+.cma-table-card-container thead tr th[style*="sticky"],
+.cma-main thead tr th[style*="sticky"],
+.mc-th-actions {
+  white-space: nowrap !important;
+  word-break: normal !important;
+}
+
+/* Actions and interactive columns should never hide overflow */
+.mc-td-actions,
+.mc-table-wrapper tbody tr td:last-child,
+.cma-table-card-container tbody tr td:last-child,
+.cma-main tbody tr td:last-child {
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+
+/* 7. Unified Status Pills & Badges inside table cells (Matches Flight Log Reference) */
+.mc-table-wrapper tbody tr td span[style*="padding"],
+.cma-table-card-container tbody tr td span[style*="padding"],
+table.mc-table tbody tr td span[style*="padding"],
+.ol-table tbody tr td span[style*="padding"],
+.of-table tbody tr td span[style*="padding"],
+.cma-main tbody tr td span[style*="padding"],
+.mc-table-wrapper tbody tr td div[style*="padding"][style*="border-radius"],
+.cma-table-card-container tbody tr td div[style*="padding"][style*="border-radius"],
+table.mc-table tbody tr td div[style*="padding"][style*="border-radius"],
+.cma-main tbody tr td div[style*="padding"][style*="border-radius"],
+.status-pill {
+  border-radius: 9999px !important;
+  padding: 4px 12px !important;
+  font-size: 11.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.2px !important;
+  line-height: 1.2 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+  border: 1px solid rgba(0, 0, 0, 0.06) !important;
+  transition: transform 0.15s ease !important;
+}
+
+.mc-table-wrapper tbody tr td span[style*="padding"]:hover,
+.cma-table-card-container tbody tr td span[style*="padding"]:hover,
+table.mc-table tbody tr td span[style*="padding"]:hover,
+.status-pill:hover {
+  transform: scale(1.03) !important;
+}
+
+/* Specific status pill colors for StatusPill component */
+.status-pill-green {
+  background-color: #f0fdf4 !important;
+  color: #15803d !important;
+  border: 1px solid #bbf7d0 !important;
+}
+
+.status-pill-blue {
+  background-color: #eff6ff !important;
+  color: #1d4ed8 !important;
+  border: 1px solid #bfdbfe !important;
+}
+
+.status-pill-amber {
+  background-color: #fffbeb !important;
+  color: #b45309 !important;
+  border: 1px solid #fde68a !important;
+}
+
+.status-pill-red {
+  background-color: #fef2f2 !important;
+  color: #b91c1c !important;
+  border: 1px solid #fecaca !important;
+}
+
+.status-pill-gray {
+  background-color: #f1f5f9 !important;
+  color: #475569 !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+/* 8. Action Buttons inside tables - Smooth Hover & Uniform Size */
+.mc-table-wrapper tbody tr td button,
+.cma-table-card-container tbody tr td button,
+table.mc-table tbody tr td button,
+.ol-table tbody tr td button,
+.of-table tbody tr td button,
+.user-admin-table tbody tr td button,
+.cma-main tbody tr td button,
+.mc-td-actions button,
+td[style*="tdActionsStyle"] button,
+td .action-buttons button,
+td .action-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 20px !important;
+  height: 20px !important;
+  border-radius: 4px !important;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  cursor: pointer !important;
+}
+
+.mc-td-actions div,
+td[style*="tdActionsStyle"] div,
+td .action-buttons,
+table td:last-child>div[style*="flex"],
+table td:last-child>div[style*="gap"] {
+  display: flex !important;
+  align-items: center !important;
+  gap: 2px !important;
+}
+
+.mc-table-wrapper tbody tr td button:hover,
+.cma-table-card-container tbody tr td button:hover,
+table.mc-table tbody tr td button:hover,
+.ol-table tbody tr td button:hover,
+.of-table tbody tr td button:hover,
+.user-admin-table tbody tr td button:hover,
+.cma-main tbody tr td button:hover,
+.mc-td-actions button:hover,
+td[style*="tdActionsStyle"] button:hover,
+td .action-buttons button:hover,
+td .action-btn:hover {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05) !important;
+}
+
+.mc-table-wrapper tbody tr td button:active,
+.cma-table-card-container tbody tr td button:active,
+table.mc-table tbody tr td button:active,
+.ol-table tbody tr td button:active,
+.of-table tbody tr td button:active,
+.user-admin-table tbody tr td button:active,
+.cma-main tbody tr td button:active,
+.mc-td-actions button:active,
+td[style*="tdActionsStyle"] button:active,
+td .action-buttons button:active,
+td .action-btn:active {
+  transform: translateY(0) !important;
+}
+
+/* 9. Consistent Scrollbar Styling for Tables */
+.mc-table-wrapper::-webkit-scrollbar,
+.cma-table-card-container::-webkit-scrollbar,
+.ol-table-wrapper::-webkit-scrollbar,
+.of-table-wrapper::-webkit-scrollbar,
+.cma-main-wrap::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+.mc-table-wrapper::-webkit-scrollbar-track,
+.cma-table-card-container::-webkit-scrollbar-track,
+.ol-table-wrapper::-webkit-scrollbar-track,
+.of-table-wrapper::-webkit-scrollbar-track,
+.cma-main-wrap::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+
+.mc-table-wrapper::-webkit-scrollbar-thumb,
+.cma-table-card-container::-webkit-scrollbar-thumb,
+.ol-table-wrapper::-webkit-scrollbar-thumb,
+.of-table-wrapper::-webkit-scrollbar-thumb,
+.cma-main-wrap::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+.mc-table-wrapper::-webkit-scrollbar-thumb:hover,
+.cma-table-card-container::-webkit-scrollbar-thumb:hover,
+.ol-table-wrapper::-webkit-scrollbar-thumb:hover,
+.of-table-wrapper::-webkit-scrollbar-thumb:hover,
+.cma-main-wrap::-webkit-scrollbar-thumb:hover {
+  background: #94a0b4;
+}

@@ -1,0 +1,1 @@
+function a(){return`MC-${Date.now().toString(36).toUpperCase()}`}function i(t=[]){const e=(Array.isArray(t)?t:[]).filter(n=>n&&(n.name||n.unit_no||n.contact_no)).map(n=>({name:n.name||"",unit_no:n.unit_no||"",contact_no:n.contact_no||""}));return JSON.stringify(e)}export{a as c,i as s};
