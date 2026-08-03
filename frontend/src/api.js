@@ -40,8 +40,12 @@ window.fetch = async function(url, options) {
 // -------------------------------------------------
 
 export function getApiBase() {
-  // Always go through Vite dev proxy (/api -> backend)
-  // Prevents direct cross-port calls that break when backend port changes.
+  // Use the environment variable if defined (for production), otherwise fallback to '/api' for local dev
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (envUrl) {
+    // Ensure the URL does not have a trailing slash, and append /api since all backend routes use it
+    return envUrl.replace(/\/$/, '') + '/api';
+  }
   return '/api';
 }
 
