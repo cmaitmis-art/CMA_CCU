@@ -1,5 +1,5 @@
 -- Dump generated from C:\Users\AROSHA\Downloads\CCU_CMA\backend\data\cma.db
--- Generation time: 2026-08-03T03:25:52.598Z
+-- Generation time: 2026-08-03T04:48:32.490Z
 
 PRAGMA foreign_keys = OFF;
 
@@ -2965,8 +2965,8 @@ INSERT INTO "system_logs" ("id", "user_name", "action", "details", "created_at")
 INSERT INTO "system_logs" ("id", "user_name", "action", "details", "created_at") VALUES (2, 'Mr.H.C.Hewanadugala', 'Deleted ALL M.Com records', 'Deleted all 213 M.Com records', '2026-07-28 03:39:51.000 +00:00');
 
 -- Data for: users
-INSERT INTO "users" ("id", "username", "password", "name", "role", "email", "created_at", "avatar_url", "is_online", "last_active", "is_deleted") VALUES (138, 'admin', 'password', 'IT', 'Admin', 'it@cma.lk', '2026-06-30 04:25:10.708 +00:00', '/uploads/avatars/user-138-1783502990653.jpg', 1, '2026-08-02 18:47:59.392 +00:00', 0);
-INSERT INTO "users" ("id", "username", "password", "name", "role", "email", "created_at", "avatar_url", "is_online", "last_active", "is_deleted") VALUES (152, 'agm', 'password', 'Mrs. Samantha Ampagala', 'AGM', 'agm@example.com', '2026-06-30 04:25:11.908 +00:00', '/uploads/avatars/user-152-1782897945720.jpg', 1, '2026-07-31 10:32:33.403 +00:00', 0);
+INSERT INTO "users" ("id", "username", "password", "name", "role", "email", "created_at", "avatar_url", "is_online", "last_active", "is_deleted") VALUES (138, 'admin', 'password', 'IT', 'Admin', 'it@cma.lk', '2026-06-30 04:25:10.708 +00:00', '/uploads/avatars/user-138-1783502990653.jpg', 1, '2026-08-03 04:48:17.965 +00:00', 0);
+INSERT INTO "users" ("id", "username", "password", "name", "role", "email", "created_at", "avatar_url", "is_online", "last_active", "is_deleted") VALUES (152, 'agm', 'password', 'Mrs. Samantha Ampagala', 'AGM', 'agm@example.com', '2026-06-30 04:25:11.908 +00:00', '/uploads/avatars/user-152-1782897945720.jpg', 1, '2026-08-03 03:57:08.977 +00:00', 0);
 INSERT INTO "users" ("id", "username", "password", "name", "role", "email", "created_at", "avatar_url", "is_online", "last_active", "is_deleted") VALUES (546, 'chaminda', 'password', 'Mr.H.C.Hewanadugala', 'MA', 'ma@example.com', '2026-07-01 04:40:40.953 +00:00', '/uploads/avatars/user-546-1784197649554.jpg', 1, '2026-07-28 09:37:48.711 +00:00', 0);
 INSERT INTO "users" ("id", "username", "password", "name", "role", "email", "created_at", "avatar_url", "is_online", "last_active", "is_deleted") VALUES (547, 'anushka', 'password', 'Mr. A.G.A.Priyadarshana', 'MA', 'ma1@example.com', '2026-07-01 04:40:41.168 +00:00', '/uploads/avatars/user-547-1782898044709.jpg', 1, '2026-07-15 10:12:17.050 +00:00', 0);
 INSERT INTO "users" ("id", "username", "password", "name", "role", "email", "created_at", "avatar_url", "is_online", "last_active", "is_deleted") VALUES (548, 'chandana', 'password', 'Mr.C.P.Rathnayake', 'MA', 'ma.bandara@example.com', '2026-07-01 04:40:41.301 +00:00', '/uploads/avatars/user-548-1784014983625.jpg', 1, '2026-07-14 10:15:56.081 +00:00', 0);

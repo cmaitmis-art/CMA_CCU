@@ -64,13 +64,14 @@ app.use(cors({
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
 
-    // Allow localhost and any private LAN IP on the frontend ports
+    // Allow localhost and any private LAN IP on the frontend ports, plus the Netlify production URL
     const allowedPattern = /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):(5173|5174)$/;
-
-    if (allowedPattern.test(origin)) {
+    
+    // Check if the origin matches the localhost pattern OR is the specific Netlify domain
+    if (allowedPattern.test(origin) || origin === 'https://cma-ccu.netlify.app') {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      callback(new Error('Not allowed by CORS: ' + origin));
     }
   },
   credentials: true,
