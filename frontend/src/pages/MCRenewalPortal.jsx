@@ -142,15 +142,17 @@ const money = (n) =>
   });
 
 import {
-  fetchMCsAll,
-  fetchMComsAll,
+  fetchMCs,
+  fetchMComs,
   submitRenewal,
   fetchRenewal,
   fetchRenewals,
 } from "../api.js";
 import { useSettings } from "../SettingsContext.jsx";
+import { CMA_LOGO_BASE64 } from "../utils/logoBase64.js";
 import {
   buildMultiYearRenewalRows,
+  buildMcomMultiYearRows,
   getCategoryDisplayValue,
 } from "../components/mc-management/MCManagementShared.jsx";
 
@@ -170,8 +172,8 @@ const renewalApi = {
     if (!q) return [];
 
     const [mcRes, mcomRes] = await Promise.all([
-      fetchMCsAll(),
-      fetchMComsAll(),
+      fetchMCs({ q, searchField: searchFilter, limit: 50 }),
+      fetchMComs({ q, searchField: searchFilter, limit: 50 }),
     ]);
 
     const mcs = mcRes.rows || mcRes || [];
@@ -183,15 +185,6 @@ const renewalApi = {
     const combinedData = [...mcData, ...mcomData];
 
     return combinedData
-      .filter((r) => {
-        const name = String(
-          r.name || r.management_corporation_name || "",
-        ).toLowerCase();
-        const pNo = String(
-          r.planNo || r.plan_no || r.new_file_no || r.file_no || "",
-        ).toLowerCase();
-        return name.includes(q) || pNo.includes(q);
-      })
       .map((r) => ({
         id: r.id,
         type: r._recordType,
@@ -208,6 +201,7 @@ const renewalApi = {
         renewal_period: r.renewal_period,
         reg_date: r.reg_date,
         renewal_paid_year: r.renewal_paid_year,
+        mc_mcom: r.mc_mcom,
       }));
   },
   async initiateGovPay(data) {
@@ -407,7 +401,7 @@ function SummaryPanel({ selectedMC, selectedYears, totalDue, applicant, step }) 
               <div style={{ fontSize: 13.5, fontWeight: 600, color: theme.text }}>
                 {selectedMC.name}
               </div>
-              <div style={{ fontSize: 12, color: theme.text2, fontFamily: fontMono }}>
+              <div style={{ fontSize: 12, color: theme.text2, fontFamily: fontBody }}>
                 {selectedMC.planNo}
                 {selectedMC.category ? ` · ${selectedMC.category}` : ""}
               </div>
@@ -444,7 +438,7 @@ function SummaryPanel({ selectedMC, selectedYears, totalDue, applicant, step }) 
                     borderRadius: 999,
                     fontSize: 12,
                     fontWeight: 700,
-                    fontFamily: fontMono,
+                    fontFamily: fontBody,
                   }}
                 >
                   {y}
@@ -492,7 +486,7 @@ function SummaryPanel({ selectedMC, selectedYears, totalDue, applicant, step }) 
                 fontSize: 19,
                 fontWeight: 700,
                 color: theme.maroon,
-                fontFamily: fontMono,
+                fontFamily: fontBody,
               }}
             >
               {money(totalDue)}
@@ -687,7 +681,9 @@ export default function MCRenewalPortal({
 
   const currentYear = new Date().getFullYear();
   const multiYearRows = selectedMC
-    ? buildMultiYearRenewalRows(selectedMC, currentYear)
+    ? selectedMC.type === "M.Com"
+      ? buildMcomMultiYearRows(selectedMC, currentYear)
+      : buildMultiYearRenewalRows(selectedMC, currentYear)
     : [];
 
   const debounceRef = useRef(null);
@@ -696,10 +692,15 @@ export default function MCRenewalPortal({
     if (!searchOpen) return;
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
-      setSearching(true);
-      const results = await renewalApi.searchMC(searchQuery, searchFilter);
-      setSearchResults(results);
-      setSearching(false);
+      try {
+        setSearching(true);
+        const results = await renewalApi.searchMC(searchQuery, searchFilter);
+        setSearchResults(results);
+      } catch (e) {
+        setSearchResults([]);
+      } finally {
+        setSearching(false);
+      }
     }, 300);
     return () => clearTimeout(debounceRef.current);
   }, [searchQuery, searchFilter, searchOpen]);
@@ -721,7 +722,11 @@ export default function MCRenewalPortal({
 
   // ---- Step 3: renewal timeline / year selection --------------------------
   const dueRows = useMemo(
-    () => (selectedMC ? buildMultiYearRenewalRows(selectedMC, settings) : []),
+    () => (selectedMC 
+      ? selectedMC.type === "M.Com"
+        ? buildMcomMultiYearRows(selectedMC, settings)
+        : buildMultiYearRenewalRows(selectedMC, settings) 
+      : []),
     [selectedMC, settings],
   );
   const lastRenewedYear =
@@ -853,7 +858,6 @@ export default function MCRenewalPortal({
     const r = record ||
       renewalRecord ||
       (dashboardRenewals && dashboardRenewals[0]) || { years: [] };
-    const win = window.open("", "_blank");
 
     // Whether this receipt is for the renewal that's currently active in
     // the wizard (selectedMC/applicant are still in state and reliable), or
@@ -873,16 +877,19 @@ export default function MCRenewalPortal({
     const address = isCurrentFlow && applicant
       ? `${applicant.addr1 || ""} ${applicant.addr2 || ""}, ${applicant.city || ""}`
       : r.applicant_address || r.address || "";
-    const units =
-      (isCurrentFlow &&
-        (selectedMC?.units || selectedMC?.residential_units)) ||
-      r.units ||
-      r.residential_units ||
-      "N/A";
+    
+    const mcUnits = isCurrentFlow ? (selectedMC?.units ?? selectedMC?.residential_units) : undefined;
+    const rUnits = r.units ?? r.residential_units;
+    const units = mcUnits ?? rUnits ?? "N/A";
+
     const category =
       (isCurrentFlow && selectedMC?.category) || r.category || "-";
 
-    win.document.write(`
+    const fileNo = (isCurrentFlow && (selectedMC?.file_no || selectedMC?.new_file_no || selectedMC?.planNo)) || r.file_no || r.new_file_no || r.plan_no || "-";
+    const mcName = r.mc_name || (isCurrentFlow ? selectedMC?.name : "");
+    const addressLine = [mcName, fileNo, address].filter(Boolean).join(" | ");
+
+    const htmlString = `
       <html><head><title>Renewal Receipt - ${r.ref_no || ""}</title>
       <style>
         @page { margin: 20px; size: A4 portrait; }
@@ -912,11 +919,11 @@ export default function MCRenewalPortal({
         .signatures { display: flex; justify-content: space-between; }
         .sig-block { width: 250px; text-align: center; border-top: 1px solid #000; padding-top: 5px; }
       </style></head>
-      <body onload="window.print()">
+      <body>
         <div class="top-ref">No. ${r.ref_no || ""}</div>
         
         <div class="header">
-          <img src="/cma-logo.png" alt="CMA Logo" class="logo" onerror="this.style.display='none'" />
+          <img src="${CMA_LOGO_BASE64}" alt="CMA Logo" class="logo" />
           <div class="title">CONDOMINIUM MANAGEMENT AUTHORITY</div>
           <div class="subtitle">Customer Care Division / Legal Division</div>
         </div>
@@ -938,11 +945,11 @@ export default function MCRenewalPortal({
           <tbody>
             <tr>
               <td>File No</td>
-              <td>${r.plan_no || ""}</td>
+              <td>${fileNo}</td>
             </tr>
             <tr>
               <td>Name of the MC & Address</td>
-              <td>${r.mc_name || ""} | ${address}</td>
+              <td>${addressLine}</td>
             </tr>
             <tr>
               <td>Period</td>
@@ -961,7 +968,7 @@ export default function MCRenewalPortal({
               <td>${(r.years?.length || 1) * 12}</td>
             </tr>
             <tr>
-              <td>Fee Rs. (Rate ${money(feeRs / (units || 1))} / 12 x 12 months x ${units} units)</td>
+              <td>Fee Rs. (Rate ${units !== "N/A" && units > 0 ? money(feeRs / units / (r.years?.length || 1)) : money(0)} / 12 &times; ${(r.years?.length || 1) * 12} months &times; ${units} units)</td>
               <td>${money(feeRs).replace("Rs. ", "")}</td>
             </tr>
             <tr>
@@ -988,9 +995,24 @@ export default function MCRenewalPortal({
           <div class="sig-block">Authorized Signature</div>
           <div class="sig-block">Date</div>
         </div>
+        <script>
+          window.addEventListener('load', function() {
+            setTimeout(function() {
+              window.focus();
+              window.print();
+            }, 400);
+          });
+        </script>
       </body></html>
-    `);
-    win.document.close();
+    `;
+
+    const blob = new Blob([htmlString], { type: 'text/html' });
+    const blobUrl = URL.createObjectURL(blob);
+    const win = window.open(blobUrl, "_blank", "noopener,noreferrer");
+    if (!win) {
+      alert("Please allow pop-ups to print the renewal receipt");
+    }
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
   }
 
   // Auto-save draft
@@ -1031,7 +1053,7 @@ export default function MCRenewalPortal({
     gap: 12,
     width: "100%",
     padding: "16px 20px",
-    background: theme.amberBg,
+    background: "#f3f4f6",
     border: `2px solid ${theme.border}`,
     borderRadius: 12,
     fontSize: 15,
@@ -1096,20 +1118,27 @@ export default function MCRenewalPortal({
                 </p>
               </div>
               <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                <input
-                  type="text"
-                  placeholder="Search Plan No or Name..."
-                  value={dashboardSearchQuery}
-                  onChange={(e) => setDashboardSearchQuery(e.target.value)}
-                  style={{
-                    padding: "8px 12px",
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: 6,
-                    fontSize: 13,
-                    outline: "none",
-                    minWidth: 200,
-                  }}
-                />
+                <div style={{ position: 'relative', minWidth: 240 }}>
+                  <i className="fas fa-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#999', fontSize: 13 }}></i>
+                  <input
+                    type="text"
+                    placeholder="Search Plan No or Name..."
+                    value={dashboardSearchQuery}
+                    onChange={(e) => setDashboardSearchQuery(e.target.value)}
+                    style={{
+                      padding: "8px 12px 8px 30px",
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: 6,
+                      fontSize: 13,
+                      outline: "none",
+                      width: '100%',
+                      transition: 'border-color 0.2s',
+                      boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.02)'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+                    onBlur={(e) => e.target.style.borderColor = theme.border}
+                  />
+                </div>
                 <button type="button" style={pillBtn(true)} onClick={startNew}>
                   + New Renewal
                 </button>
@@ -1182,7 +1211,18 @@ export default function MCRenewalPortal({
                           textTransform: "uppercase",
                         }}
                       >
-                        MC / M.Com
+                        Plan No
+                      </th>
+                      <th
+                        style={{
+                          textAlign: "left",
+                          padding: "12px 16px",
+                          color: theme.text2,
+                          fontSize: 11.5,
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        Name
                       </th>
                       <th
                         style={{
@@ -1217,7 +1257,8 @@ export default function MCRenewalPortal({
                           >
                             Draft
                           </span>
-                          <br />
+                        </td>
+                        <td style={{ padding: "12px 16px" }}>
                           <span
                             style={{
                               background: theme.amberBg,
@@ -1230,6 +1271,13 @@ export default function MCRenewalPortal({
                           >
                             Incomplete
                           </span>
+                        </td>
+                        <td style={{ padding: "12px 16px" }}>
+                          <div style={{ fontWeight: 600, color: theme.text }}>
+                            {draft.selectedMC
+                              ? draft.selectedMC.planNo || "-"
+                              : "-"}
+                          </div>
                         </td>
                         <td style={{ padding: "12px 16px" }}>
                           <div style={{ fontWeight: 600, color: theme.text }}>
@@ -1282,7 +1330,7 @@ export default function MCRenewalPortal({
                         if (!activeUser) {
                           return (
                             <tr>
-                              <td colSpan="5" style={{ padding: "30px 16px", textAlign: "center", color: theme.text3 }}>
+                              <td colSpan="6" style={{ padding: "30px 16px", textAlign: "center", color: theme.text3 }}>
                                 Please enter a Plan No or Name to search for renewals.
                               </td>
                             </tr>
@@ -1292,7 +1340,7 @@ export default function MCRenewalPortal({
                           if (filtered.length === 0 && !draft) {
                             return (
                               <tr>
-                                <td colSpan="5" style={{ padding: "30px 16px", textAlign: "center", color: theme.text3 }}>
+                                <td colSpan="6" style={{ padding: "30px 16px", textAlign: "center", color: theme.text3 }}>
                                   No renewals found for your account. You can search above to find any plan.
                                 </td>
                               </tr>
@@ -1308,7 +1356,7 @@ export default function MCRenewalPortal({
                         if (filtered.length === 0) {
                           return (
                             <tr>
-                              <td colSpan="5" style={{ padding: "30px 16px", textAlign: "center", color: theme.text3 }}>
+                              <td colSpan="6" style={{ padding: "30px 16px", textAlign: "center", color: theme.text3 }}>
                                 No matching renewals found for "{dashboardSearchQuery}"
                               </td>
                             </tr>
@@ -1358,7 +1406,12 @@ export default function MCRenewalPortal({
                           </td>
                           <td style={{ padding: "12px 16px" }}>
                             <div style={{ fontWeight: 600, color: theme.text }}>
-                              {r.mc_name || r.plan_no}
+                              {r.plan_no || "-"}
+                            </div>
+                          </td>
+                          <td style={{ padding: "12px 16px" }}>
+                            <div style={{ fontWeight: 600, color: theme.text }}>
+                              {r.mc_name || "-"}
                             </div>
                             <div style={{ fontSize: 11.5, color: theme.text3 }}>
                               Years: {r.years?.join(", ")}
@@ -1403,9 +1456,9 @@ export default function MCRenewalPortal({
                               </button>
                             ) : (
                               <span
-                                style={{ color: theme.text3, fontSize: 12 }}
+                                style={{ color: "#8a6d00", fontSize: 12, fontWeight: 600 }}
                               >
-                                Processing
+                                Pending
                               </span>
                             )}
                           </td>
@@ -1560,15 +1613,22 @@ export default function MCRenewalPortal({
                     {multiYearRows.length === 0 ? (
                       <div
                         style={{
-                          padding: "24px",
+                          padding: "30px 24px",
                           textAlign: "center",
-                          background: "#f9f9f9",
+                          background: "#f0fdf4",
+                          border: `1px solid #bbf7d0`,
                           borderRadius: 8,
                           color: theme.text3,
                           fontSize: 13,
                         }}
                       >
-                        No available renewal years for this MC.
+                        <div style={{ marginBottom: 8, color: theme.green, fontSize: 28 }}>
+                          <i className="fas fa-check-circle"></i>
+                        </div>
+                        <strong style={{ color: theme.green, fontSize: 15 }}>Renewals Up To Date</strong>
+                        <div style={{ marginTop: 8, color: '#166534' }}>
+                          All required renewals up to the current year have been completed. No pending renewals at this time.
+                        </div>
                       </div>
                     ) : (
                       <div

@@ -166,7 +166,7 @@ function Topbar({ currentUser, currentPage, onToggleSidebar, onLogout, onNavigat
           <button 
             className="topbar-btn" 
             style={{ marginRight: '8px', fontSize: '12px', padding: '0 12px', fontWeight: 'bold', width: 'auto', borderRadius: '8px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)' }}
-            onClick={() => onNavigate('renewal_portal')}
+            onClick={() => window.open('/renewal', '_blank')}
             title="Open MC Renewal Portal"
           >
             <i className="fas fa-globe" style={{ marginRight: '6px' }}></i> Web

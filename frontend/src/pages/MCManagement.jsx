@@ -611,10 +611,32 @@ export default function MCManagementBackend({ currentUser, isViewOnly }) {
         }
 
         // Grand totals
-        const grandFee = multiYearRows.reduce((s, r) => s + r.fee, 0);
-        const grandSscl = multiYearRows.reduce((s, r) => s + r.sscl, 0);
-        const grandVat = multiYearRows.reduce((s, r) => s + r.vat, 0);
-        const grandTotal = multiYearRows.reduce((s, r) => s + r.total, 0) || mc?.renewal_paid_amount || 0;
+        let grandFee = multiYearRows.reduce((s, r) => s + r.fee, 0);
+        let grandSscl = multiYearRows.reduce((s, r) => s + r.sscl, 0);
+        let grandVat = multiYearRows.reduce((s, r) => s + r.vat, 0);
+        let grandTotal = multiYearRows.reduce((s, r) => s + r.total, 0);
+
+        if (multiYearRows.length === 0 && mc?.renewal_paid_amount) {
+          grandTotal = mc.renewal_paid_amount;
+          grandFee = grandTotal / 1.2095;
+          grandSscl = grandFee * 0.025;
+          grandVat = (grandFee + grandSscl) * 0.18;
+          
+          let calculatedMonths = 12;
+          if (units > 0 && rate > 0) {
+            calculatedMonths = Math.round(grandFee / (units * (rate / 12)));
+            if (calculatedMonths < 1) calculatedMonths = 12;
+          }
+          const yr = mc.renewal_paid_year || new Date().getFullYear();
+          const numYears = Math.max(1, Math.round(calculatedMonths / 12));
+          const startYr = yr - numYears + 1;
+          
+          for (let y = startYr; y <= yr; y++) {
+             multiYearRows.push({ year: y, units, rate: rate, fee: grandFee / numYears, sscl: grandSscl / numYears, vat: grandVat / numYears, total: grandTotal / numYears, isPerUnit: true });
+          }
+        } else if (multiYearRows.length === 0) {
+          grandTotal = 0;
+        }
 
         invoiceData = {
           _isRenewal: true,
@@ -1137,6 +1159,10 @@ export default function MCManagementBackend({ currentUser, isViewOnly }) {
           finalRecord.sscl_amount = filteredRows.reduce((s, r) => s + r.sscl, 0);
           finalRecord.vat_amount = filteredRows.reduce((s, r) => s + r.vat, 0);
           finalRecord.total_amount = filteredRows.reduce((s, r) => s + r.total, 0);
+          
+          const sortedRows = [...filteredRows].sort((a,b) => a.year - b.year);
+          finalRecord.period_start = `${sortedRows[0].year}-01-01`;
+          finalRecord.period_end = `${sortedRows[sortedRows.length - 1].year}-12-31`;
         }
       }
       printRenewalWithCoveringLetter(finalRecord);
@@ -3063,13 +3089,18 @@ export default function MCManagementBackend({ currentUser, isViewOnly }) {
             <div style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, whiteSpace: 'nowrap', marginRight: 4 }}>All MC Records</div>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', flex: '1 1 auto', justifyContent: 'flex-end' }}>
-                <input id="mc_form_field_14" name="mc_form_field_14"
-                  type="text"
-                  placeholder="Search MC-"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 130, flex: '1 1 130px', maxWidth: 180 }}
-                />
+                <div style={{ position: 'relative', flex: '1 1 180px', maxWidth: 260 }}>
+                  <i className="fas fa-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#999', fontSize: 12 }}></i>
+                  <input id="mc_form_field_14" name="mc_form_field_14"
+                    type="text"
+                    placeholder="Search MC-"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    style={{ padding: '5px 8px 5px 28px', height: 30, borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 12, width: '100%', outline: 'none', transition: 'border-color 0.2s', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.02)' }}
+                    onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+                    onBlur={(e) => e.target.style.borderColor = '#cbd5e1'}
+                  />
+                </div>
                 <select id="mc_form_field_15" name="mc_form_field_15"
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}

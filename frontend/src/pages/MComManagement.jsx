@@ -12,6 +12,7 @@ import { exportToPdfPrint } from '../utils/pdfExport';
 import { MONTH_OPTIONS, getYearFilterOptions } from '../utils/filterConstants';
 import GenericExportModal from '../components/GenericExportModal.jsx';
 import { useSettings } from '../SettingsContext.jsx';
+import { CMA_LOGO_BASE64 } from '../utils/logoBase64.js';
 import {
   getAgmDueDate,
   daysUntil,
@@ -1162,7 +1163,7 @@ export default function MComManagement({ currentUser }) {
       <div class="print-receipt">
         <div class="rc-topline"><span class="rc-regno">No. ${fileNo}</span></div>
         <div class="rc-head">
-          <div class="rc-logo"><img src="/assets/cma-logo.png" alt="CMA Logo" /></div>
+          <div class="rc-logo"><img src="${CMA_LOGO_BASE64}" alt="CMA Logo" /></div>
           <div class="rc-title">CONDOMINIUM MANAGEMENT AUTHORITY</div>
           <div class="rc-sub">Customer Care Division / Legal Division</div>
         </div>
@@ -1632,16 +1633,21 @@ export default function MComManagement({ currentUser }) {
         <div style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, whiteSpace: 'nowrap', marginRight: 4 }}>All M.Com Records</div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', flex: '1 1 auto', justifyContent: 'flex-end' }}>
-            <input
-              id="mcom_search_input"
-              name="mcom_search_input"
-              aria-label="Search M.Com"
-              type="text"
-              placeholder="Search M.Com…"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 140, flex: '1 1 140px', maxWidth: 200 }}
-            />
+            <div style={{ position: 'relative', flex: '1 1 180px', maxWidth: 260 }}>
+              <i className="fas fa-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#999', fontSize: 12 }}></i>
+              <input
+                id="mcom_search_input"
+                name="mcom_search_input"
+                aria-label="Search M.Com"
+                type="text"
+                placeholder="Search M.Com…"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                style={{ padding: '5px 8px 5px 28px', height: 30, borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 12, width: '100%', outline: 'none', transition: 'border-color 0.2s', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.02)' }}
+                onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+                onBlur={(e) => e.target.style.borderColor = '#cbd5e1'}
+              />
+            </div>
             <select
               id="mcom_status_filter"
               name="mcom_status_filter"
@@ -1988,8 +1994,34 @@ export default function MComManagement({ currentUser }) {
       {/* - Renewal Modal - */}
       {renewalModalOpen && renewalRecord && (() => {
         const mc = renewalRecord;
-        const multiRows = buildMcomMultiYearRows(mc, settings);
-        const grandTotal = multiRows.reduce((s, r) => s + r.total, 0);
+        let multiRows = buildMcomMultiYearRows(mc, settings);
+        let grandTotal = multiRows.reduce((s, r) => s + r.total, 0);
+        
+        if (multiRows.length === 0 && mc?.renewal_paid_amount) {
+          grandTotal = mc.renewal_paid_amount;
+          const grandFee = grandTotal / 1.2095;
+          const grandSscl = grandFee * 0.025;
+          const grandVat = (grandFee + grandSscl) * 0.18;
+          
+          const isGov = String(mc?.mc_mcom || '').toUpperCase().includes('GOV') || String(mc?.category || '').toLowerCase().includes('government');
+          const units = parseInt(mc?.units) || 0;
+          const yr = mc.renewal_paid_year || new Date().getFullYear();
+          const rate = getMcomFeeForYear(units, yr, isGov, settings);
+          
+          let calculatedMonths = 12;
+          if (rate > 0) {
+            calculatedMonths = Math.round(grandFee / (rate / 12));
+            if (calculatedMonths < 1) calculatedMonths = 12;
+          }
+          
+          const numYears = Math.max(1, Math.round(calculatedMonths / 12));
+          const startYr = yr - numYears + 1;
+          
+          for (let y = startYr; y <= yr; y++) {
+             multiRows.push({ year: y, units, fee: grandFee / numYears, sscl: grandSscl / numYears, vat: grandVat / numYears, total: grandTotal / numYears, isGov });
+          }
+        }
+
         const payStatus = mc.renewal_payment_status;
         const fmt = (n) => Number(n).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 

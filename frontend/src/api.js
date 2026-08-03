@@ -232,17 +232,14 @@ export async function fetchPendingCfiles(limit = 5) {
 }
 
 // ========== MC API ==========
-export async function fetchMCs() {
-  const response = await fetch(`${API_BASE}/mc`);
+export async function fetchMCs({ status, year, month, category, municipality, page, limit, q, searchField, renewal_vise, agm_vise } = {}) {
+  const url = buildUrl(`${API_BASE}/mc`, { status, year, month, category, municipality, page, limit, q, searchField, renewal_vise, agm_vise });
+  const response = await fetch(url);
   return handleResponse(response);
 }
 
-export async function fetchMCsFiltered({
-  year, month, category, status, municipality, page = 1, limit = 20, q, renewal_vise, agm_vise,
-} = {}) {
-  const url = buildUrl(`${API_BASE}/mc`, { status, year, month, category, municipality, page, limit, q, renewal_vise, agm_vise });
-  const response = await fetch(url);
-  return handleResponse(response);
+export async function fetchMCsFiltered(filters = {}) {
+  return fetchMCs(filters);
 }
 
 export async function fetchMCsAll() {
@@ -310,8 +307,8 @@ export async function deleteMComsBulk(fileNos = []) {
 }
 
 // ========== M.COM API ==========
-export async function fetchMComs({ year, month, municipality, mc_mcom, category, status, q, page, limit } = {}) {
-  const url = buildUrl(`${API_BASE}/mcom`, { year, month, municipality, mc_mcom, category, status, q, page, limit });
+export async function fetchMComs({ year, month, municipality, mc_mcom, category, status, q, searchField, page, limit } = {}) {
+  const url = buildUrl(`${API_BASE}/mcom`, { year, month, municipality, mc_mcom, category, status, q, searchField, page, limit });
   const response = await fetch(url);
   return handleResponse(response);
 }

@@ -18,7 +18,6 @@
  */
 
 const express = require('express');
-const { Op } = require('sequelize');
 const router = express.Router();
 const db = require('../db');
 const { mergeImportPayload } = require('../utils/importMerge');
@@ -94,41 +93,67 @@ function resolveFileNo(body, data) {
 // Query params: ?q=search &status=Active &year=2024 &category=A &page=1 &limit=20
 router.get('/', async (req, res) => {
   try {
-    const { q, status, year, month, category, mc_mcom, page = 1, limit = 20 } = req.query;
+    const { q, searchField, status, year, month, category, mc_mcom, page = 1, limit = 20 } = req.query;
     const offset = (Math.max(1, Number(page)) - 1) * Math.max(1, Number(limit));
 
     const where = {};
     const andConditions = [];
 
-    // FIX: Changed Op.iLike → Op.like.
-    // SQLite does NOT support iLike (that's PostgreSQL only).
     // SQLite's LIKE is already case-insensitive for ASCII letters.
     if (q) {
-      andConditions.push({
-        [Op.or]: [
-          { file_no: { [Op.like]: `%${q}%` } },
-          { new_file_no: { [Op.like]: `%${q}%` } },
-          { old_file_no: { [Op.like]: `%${q}%` } },
-          { management_corporation_name: { [Op.like]: `%${q}%` } },
-          { address: { [Op.like]: `%${q}%` } },
-          { secretary: { [Op.like]: `%${q}%` } },
-          { treasurer: { [Op.like]: `%${q}%` } },
-          { town: { [Op.like]: `%${q}%` } },
-          { remark: { [Op.like]: `%${q}%` } },
-          { certificate_file_no: { [Op.like]: `%${q}%` } },
-          { email_address: { [Op.like]: `%${q}%` } },
-        ]
-      });
+      if (searchField === 'planNo') {
+        andConditions.push({
+          $or: [
+            { file_no: { $like: `%${q}%` } },
+            { new_file_no: { $like: `%${q}%` } },
+            { old_file_no: { $like: `%${q}%` } },
+            { plan_no: { $like: `%${q}%` } },
+          ]
+        });
+      } else if (searchField === 'name') {
+        andConditions.push({
+          $or: [
+            { management_corporation_name: { $like: `%${q}%` } },
+          ]
+        });
+      } else if (searchField === 'planOrName') {
+        andConditions.push({
+          $or: [
+            { file_no: { $like: `%${q}%` } },
+            { new_file_no: { $like: `%${q}%` } },
+            { old_file_no: { $like: `%${q}%` } },
+            { plan_no: { $like: `%${q}%` } },
+            { management_corporation_name: { $like: `%${q}%` } },
+          ]
+        });
+      } else {
+        andConditions.push({
+          $or: [
+            { file_no: { $like: `%${q}%` } },
+            { new_file_no: { $like: `%${q}%` } },
+            { old_file_no: { $like: `%${q}%` } },
+            { plan_no: { $like: `%${q}%` } },
+            { management_corporation_name: { $like: `%${q}%` } },
+            { address: { $like: `%${q}%` } },
+            { secretary: { $like: `%${q}%` } },
+            { treasurer: { $like: `%${q}%` } },
+            { town: { $like: `%${q}%` } },
+            { remark: { $like: `%${q}%` } },
+            { certificate_file_no: { $like: `%${q}%` } },
+            { email_address: { $like: `%${q}%` } },
+          ]
+        });
+      }
     }
 
     if (status) andConditions.push({ status });
     if (month) {
       if (month.includes('-')) {
-        andConditions.push({ reg_date: { [Op.like]: `${month}-%` } });
+        andConditions.push({ reg_date: { $like: `${month}-%` } });
       } else if (year) {
-        andConditions.push({ reg_date: { [Op.like]: `${year}-${month}-%` } });
+        andConditions.push({ reg_date: { $like: `${year}-${month}-%` } });
       } else {
-        andConditions.push({ reg_date: { [Op.like]: `%-${month}-%` } });
+        andConditions.push({ reg_date: { $like: `%-${month}-%` } });
       }
     } else if (year) {
       andConditions.push({ year: Number(year) });
@@ -137,7 +162,7 @@ router.get('/', async (req, res) => {
     const catVal = category || mc_mcom;
     if (catVal) {
       andConditions.push({
-        [Op.or]: [
+        $or: [
           { category: catVal },
           { mc_mcom: catVal }
         ]
@@ -145,7 +170,7 @@ router.get('/', async (req, res) => {
     }
 
     if (andConditions.length > 0) {
-      where[Op.and] = andConditions;
+      where.$and = andConditions;
     }
 
     const { rows: records, count: total } = await McomRecord.findAndCountAll({

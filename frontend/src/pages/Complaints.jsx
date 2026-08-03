@@ -1461,16 +1461,21 @@ export default function Complaints({ currentUser, onNavigate, isViewOnly }) {
             )}
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input
-              id="complaint_search_input"
-              name="complaint_search_input"
-              aria-label="Search Complaints"
-              type="text"
-              placeholder="Search…"
-              value={searchTerm}
-              onChange={(e) => { setSearchTerm(e.target.value); setPendingOverdueFilter(false); }}
-              style={{ padding: '6px 10px', borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 160 }}
-            />
+            <div style={{ position: 'relative', flex: '1 1 180px', maxWidth: 260 }}>
+              <i className="fas fa-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#999', fontSize: 12 }}></i>
+              <input
+                id="complaint_search_input"
+                name="complaint_search_input"
+                aria-label="Search Complaints"
+                type="text"
+                placeholder="Search…"
+                value={searchTerm}
+                onChange={(e) => { setSearchTerm(e.target.value); setPendingOverdueFilter(false); }}
+                style={{ padding: '6px 10px 6px 28px', height: 30, borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 12, width: '100%', outline: 'none', transition: 'border-color 0.2s', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.02)' }}
+                onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+                onBlur={(e) => e.target.style.borderColor = '#cbd5e1'}
+              />
+            </div>
             <select
               id="complaint_category_filter"
               name="complaint_category_filter"

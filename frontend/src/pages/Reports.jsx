@@ -721,15 +721,20 @@ function DataTable({ rows, fields }) {
     <div>
       {/* Toolbar */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
-        <input
-          id="reports_search_input"
-          name="reports_search_input"
-          aria-label="Search reports"
-          placeholder="Search…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{ flex: '1 1 160px', padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 7, fontSize: 13 }}
-        />
+        <div style={{ position: 'relative', flex: '1 1 180px', maxWidth: 280 }}>
+          <i className="fas fa-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#999', fontSize: 13 }}></i>
+          <input
+            id="reports_search_input"
+            name="reports_search_input"
+            aria-label="Search reports"
+            placeholder="Search…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{ padding: '7px 10px 7px 30px', border: '1px solid var(--border)', borderRadius: 7, fontSize: 13, width: '100%', outline: 'none', transition: 'border-color 0.2s', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.02)' }}
+            onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+            onBlur={(e) => e.target.style.borderColor = 'var(--border)'}
+          />
+        </div>
         {uStatuses.length > 0 &&
           <select
             id="reports_status_filter"

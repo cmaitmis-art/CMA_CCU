@@ -152,13 +152,18 @@ export default function AgmManagementView({ onBack, onViewMc }) {
       {/* Filters & Stats */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 15 }}>
         <div style={{ display: 'flex', gap: 10 }}>
-          <input
-            type="text"
-            placeholder="Search MCs by name or file no..."
-            value={q}
-            onChange={e => setQ(e.target.value)}
-            style={{ width: 260, padding: '8px 14px', borderRadius: 8, border: `1px solid ${theme.border}`, fontSize: 13, outline: 'none' }}
-          />
+          <div style={{ position: 'relative', width: 280 }}>
+            <i className="fas fa-search" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#999', fontSize: 13 }}></i>
+            <input
+              type="text"
+              placeholder="Search MCs by name or file no..."
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              style={{ width: '100%', padding: '8px 14px 8px 32px', borderRadius: 8, border: `1px solid ${theme.border}`, fontSize: 13, outline: 'none', transition: 'border-color 0.2s', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.02)' }}
+              onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+              onBlur={(e) => e.target.style.borderColor = theme.border}
+            />
+          </div>
           <select
             value={status}
             onChange={e => setStatus(e.target.value)}

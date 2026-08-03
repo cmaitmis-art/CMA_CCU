@@ -18,7 +18,6 @@
  */
 
 const express = require('express');
-const { Op } = require('sequelize');
 const router = express.Router();
 const db = require('../db');
 
@@ -312,50 +311,77 @@ function deriveFields(data, isCreate = false) {
 //   ?page=1&limit=20 → pagination
 router.get('/', async (req, res) => {
   try {
-    const { q, status, year, month, category, town, renewal_vise, agm_vise, page = 1, limit = 20 } = req.query;
+    const { q, searchField, status, year, month, category, town, renewal_vise, agm_vise, page = 1, limit = 20 } = req.query;
     const offset = (Math.max(1, Number(page)) - 1) * Math.max(1, Number(limit));
 
     const where = {};
     const andConditions = [];
 
-    // FIX: Changed Op.iLike → Op.like.
-    // SQLite does NOT support iLike (that's PostgreSQL only).
-    // SQLite's LIKE is already case-insensitive for ASCII letters.
     if (q) {
-      andConditions.push({
-        [Op.or]: [
-          { file_no: { [Op.like]: `%${q}%` } },
-          { new_file_no: { [Op.like]: `%${q}%` } },
-          { old_file_no: { [Op.like]: `%${q}%` } },
-          { name: { [Op.like]: `%${q}%` } },
-          { management_corporation_name: { [Op.like]: `%${q}%` } },
-          { address: { [Op.like]: `%${q}%` } },
-          { secretary: { [Op.like]: `%${q}%` } },
-          { treasurer: { [Op.like]: `%${q}%` } },
-          { town: { [Op.like]: `%${q}%` } },
-        ]
-      });
+      if (searchField === 'planNo') {
+        andConditions.push({
+          $or: [
+            { file_no: { $like: `%${q}%` } },
+            { new_file_no: { $like: `%${q}%` } },
+            { old_file_no: { $like: `%${q}%` } },
+            { plan_no: { $like: `%${q}%` } },
+          ]
+        });
+      } else if (searchField === 'name') {
+        andConditions.push({
+          $or: [
+            { name: { $like: `%${q}%` } },
+            { management_corporation_name: { $like: `%${q}%` } },
+          ]
+        });
+      } else if (searchField === 'planOrName') {
+        andConditions.push({
+          $or: [
+            { file_no: { $like: `%${q}%` } },
+            { new_file_no: { $like: `%${q}%` } },
+            { old_file_no: { $like: `%${q}%` } },
+            { plan_no: { $like: `%${q}%` } },
+            { name: { $like: `%${q}%` } },
+            { management_corporation_name: { $like: `%${q}%` } },
+          ]
+        });
+      } else {
+        andConditions.push({
+          $or: [
+            { file_no: { $like: `%${q}%` } },
+            { new_file_no: { $like: `%${q}%` } },
+            { old_file_no: { $like: `%${q}%` } },
+            { plan_no: { $like: `%${q}%` } },
+            { name: { $like: `%${q}%` } },
+            { management_corporation_name: { $like: `%${q}%` } },
+            { address: { $like: `%${q}%` } },
+            { secretary: { $like: `%${q}%` } },
+            { treasurer: { $like: `%${q}%` } },
+            { town: { $like: `%${q}%` } },
+          ]
+        });
+      }
     }
 
     if (status) andConditions.push({ status });
     if (month) {
       if (month.includes('-')) {
-        andConditions.push({ reg_date: { [Op.like]: `${month}-%` } });
+        andConditions.push({ reg_date: { $like: `${month}-%` } });
       } else if (year) {
-        andConditions.push({ reg_date: { [Op.like]: `${year}-${month}-%` } });
+        andConditions.push({ reg_date: { $like: `${year}-${month}-%` } });
       } else {
-        andConditions.push({ reg_date: { [Op.like]: `%-${month}-%` } });
+        andConditions.push({ reg_date: { $like: `%-${month}-%` } });
       }
     } else if (year) {
       andConditions.push({ year: Number(year) });
     }
     if (category) andConditions.push({ category });
-    if (town) andConditions.push({ town: { [Op.like]: `%${town}%` } });
+    if (town) andConditions.push({ town: { $like: `%${town}%` } });
     if (renewal_vise) andConditions.push({ renewal_date_vise: renewal_vise });
     if (agm_vise) andConditions.push({ agm_date_vise: agm_vise });
 
     if (andConditions.length > 0) {
-      where[Op.and] = andConditions;
+      where.$and = andConditions;
     }
 
     const { rows: records, count: total } = await ManagementCorporation.findAndCountAll({

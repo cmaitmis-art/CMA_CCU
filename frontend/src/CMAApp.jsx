@@ -74,7 +74,6 @@ function CMAApp() {
       'reports',
       'users',
       'profile',
-      'renewal_portal',
       'renewal_approval',
     ]);
 
@@ -102,7 +101,6 @@ function CMAApp() {
     reports: Reports,
     users: UserAdmin,
     profile: Profile,
-    renewal_portal: MCRenewalPortal,
     renewal_approval: MCRenewalApproval,
   };
 

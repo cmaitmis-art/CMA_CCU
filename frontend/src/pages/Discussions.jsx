@@ -1024,16 +1024,21 @@ export default function DiscussionManagement({ currentUser, isViewOnly }) {
             <div style={{ marginTop: 3, color: theme.text2, fontSize: 12 }}>{filteredDiscussions.length} record{filteredDiscussions.length !== 1 ? 's' : ''}</div>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <input
-              id="disc_search_input"
-              name="disc_search_input"
-              aria-label="Search Discussions"
-              type="text"
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              placeholder="Search discussions..."
-              style={{ padding: '8px 12px', borderRadius: 8, border: `1px solid ${theme.border}`, minWidth: 200, fontSize: 13 }}
-            />
+            <div style={{ position: 'relative', flex: '1 1 200px', maxWidth: 280 }}>
+              <i className="fas fa-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#999', fontSize: 13 }}></i>
+              <input
+                id="disc_search_input"
+                name="disc_search_input"
+                aria-label="Search Discussions"
+                type="text"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder="Search discussions..."
+                style={{ padding: '8px 12px 8px 30px', borderRadius: 8, border: `1px solid ${theme.border}`, width: '100%', fontSize: 13, outline: 'none', transition: 'border-color 0.2s', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.02)' }}
+                onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+                onBlur={(e) => e.target.style.borderColor = theme.border}
+              />
+            </div>
             <select
               id="disc_status_filter"
               name="disc_status_filter"

@@ -1303,16 +1303,21 @@ export default function CFiles({ currentUser }) {
         <div style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, whiteSpace: 'nowrap', marginRight: 4 }}>C-File Records</div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', flex: '1 1 auto', justifyContent: 'flex-end' }}>
-            <input
-              id="cfile_search_input"
-              name="cfile_search_input"
-              aria-label="Search C Files"
-              type="text"
-              placeholder="Search…"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 150, flex: '1 1 150px', maxWidth: 200 }}
-            />
+            <div style={{ position: 'relative', flex: '1 1 180px', maxWidth: 260 }}>
+              <i className="fas fa-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#999', fontSize: 12 }}></i>
+              <input
+                id="cfile_search_input"
+                name="cfile_search_input"
+                aria-label="Search C Files"
+                type="text"
+                placeholder="Search…"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                style={{ padding: '5px 8px 5px 28px', height: 30, borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 12, width: '100%', outline: 'none', transition: 'border-color 0.2s', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.02)' }}
+                onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+                onBlur={(e) => e.target.style.borderColor = '#cbd5e1'}
+              />
+            </div>
             <select
               id="cfile_category_filter"
               name="cfile_category_filter"

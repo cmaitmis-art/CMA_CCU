@@ -1361,3 +1361,94 @@ export function ApprovalChecklistModal({ record, onClose, onSave, onApprove, onR
 export const EXPORT_FIELDS = [
   'No', 'Reg. Date', 'Old File No.', 'New File No.', 'Name of Management Corporation', 'Name of Management Corporation - New', 'Address', 'Plan No', 'Units', 'Residential', 'Non Residencial', 'Sevices Units', 'Catogory', 'Renewal Period', 'AGM Date', 'Next AGM Date', 'Renewal Date Vise', 'AGM Date Vise', 'MC', 'Eng.', 'MA', 'Secretary', 'unit No (Sec)', 'Treasurer', 'unit No (Trs)', 'AGM Minutes', 'Attendence', 'Audited Account', 'Final Acconts', 'Building Insuarance', 'Sinking Fund', 'Budjet Propsal', 'Town', 'Municipal Council /Pradeshiya Saba limits', 'Certificate Division File No.', 'Land registry Approved Date', 'Declaration No.', 'Email Address', 'Status'
 ];
+
+export const MCOM_RENEWAL_RATES_2023 = [
+  { maxUnits: null, minUnits: 101, fee: 20000 },
+  { maxUnits: 100, minUnits: 76, fee: 10000 },
+  { maxUnits: 75, minUnits: 51, fee: 7500 },
+  { maxUnits: 50, minUnits: 41, fee: 5000 },
+  { maxUnits: 40, minUnits: 31, fee: 3500 },
+  { maxUnits: 30, minUnits: 21, fee: 2500 },
+  { maxUnits: 20, minUnits: 11, fee: 1500 },
+  { maxUnits: 10, minUnits: 1, fee: 1000 },
+  { maxUnits: 0, minUnits: 0, fee: 250 },
+];
+
+export const MCOM_OLD_BRACKET_PRE2023 = [
+  { maxUnits: null, minUnits: 101, fee: 20000 },
+  { maxUnits: 100, minUnits: 76, fee: 10000 },
+  { maxUnits: 75, minUnits: 51, fee: 7500 },
+  { maxUnits: 50, minUnits: 41, fee: 5000 },
+  { maxUnits: 40, minUnits: 31, fee: 3500 },
+  { maxUnits: 30, minUnits: 21, fee: 2500 },
+  { maxUnits: 20, minUnits: 11, fee: 1500 },
+  { maxUnits: 10, minUnits: 1, fee: 1000 },
+];
+
+export function getMcomFeeForYear(units, year, isGov, settings) {
+  const u = parseInt(units) || 0;
+  const rates2023 = settings?.mcom_rates_2023 || MCOM_RENEWAL_RATES_2023;
+  const ratesPre2023 = settings?.mcom_rates_pre2023 || MCOM_OLD_BRACKET_PRE2023;
+
+  if (year < 2023) {
+    if (isGov) return 250;
+    const match = ratesPre2023.find(r => u >= r.minUnits && (r.maxUnits === null || u <= r.maxUnits));
+    return match ? match.fee : 250;
+  }
+  const match = rates2023.find(r => u >= r.minUnits && (r.maxUnits === null || u <= r.maxUnits));
+  return match ? match.fee : 250;
+}
+
+export function getMcomAnnualFeeInfo(mc, settings) {
+  const units = parseInt(mc?.units) || 0;
+  const currentYear = new Date().getFullYear();
+  const isGov = String(mc?.mc_mcom || '').toUpperCase().includes('GOV') || String(mc?.category || '').toLowerCase().includes('government');
+  const feePerYear = getMcomFeeForYear(units, currentYear, isGov, settings);
+  return { units, feePerYear };
+}
+
+export function getMcomRenewalAmountInfo(mc, settings) {
+  const { feePerYear } = getMcomAnnualFeeInfo(mc, settings);
+  return { annual: feePerYear, monthly: feePerYear / 12 };
+}
+
+export function buildMcomMultiYearRows(mc, settings) {
+  const units = parseInt(mc?.units) || 0;
+  const currentYear = new Date().getFullYear();
+  const isGov = String(mc?.mc_mcom || '').toUpperCase().includes('GOV') || String(mc?.category || '').toLowerCase().includes('government');
+
+  let startYear = currentYear;
+  const rawPeriod = mc?.renewal_period;
+  if (rawPeriod) {
+    const periodStr = String(rawPeriod).trim();
+    const yearMatches = periodStr.match(/\b(19|20)\d{2}\b/g);
+    if (yearMatches && yearMatches.length > 0) {
+      startYear = parseInt(yearMatches[yearMatches.length - 1]) + 1;
+    } else if (/^\d{4}$/.test(periodStr)) {
+      startYear = parseInt(periodStr) + 1;
+    }
+  } else if (mc?.reg_date) {
+    const d = new Date(mc.reg_date);
+    if (!Number.isNaN(d.getTime())) startYear = d.getFullYear();
+  }
+
+  const paidYear = mc?.renewal_paid_year ? parseInt(mc.renewal_paid_year) : null;
+  if (paidYear && paidYear >= startYear) startYear = paidYear + 1;
+
+  const endYear = currentYear;
+
+  if (startYear > endYear) return [];
+
+  const ssclRate = settings?.sscl_rate ?? 0.025;
+  const vatRate = settings?.vat_rate ?? 0.18;
+  const rows = [];
+  for (let year = startYear; year <= endYear; year++) {
+    const fee = getMcomFeeForYear(units, year, isGov, settings);
+    const sscl = parseFloat((fee * ssclRate).toFixed(2));
+    const vat = parseFloat(((fee + sscl) * vatRate).toFixed(2));
+    const total = parseFloat((fee + sscl + vat).toFixed(2));
+    rows.push({ year, units, fee, sscl, vat, total, isGov });
+  }
+  return rows;
+}
+
