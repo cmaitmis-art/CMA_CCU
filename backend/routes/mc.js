@@ -91,7 +91,8 @@ const WRITABLE_COLS = [
   'next_renewal_date',
 
   // Renewal payment / acknowledgement fields (MCManagement.jsx markRenewalPaid)
-  'renewal_paid', 'renewal_paid_date', 'renewal_paid_amount', 'renewal_paid_year',
+  'renewal_paid', 'renewal_paid_date', 'renewal_paid_amount', 'renewal_paid_year', 'renewal_paid_years',
+  'renewal_last_paid_years',
   'renewal_receipt_no', 'acknowledgement_no', 'acknowledgement_date', 'renewal_payment_status',
 
   // Columns used by the app UI (aliases / derived)
@@ -317,47 +318,45 @@ router.get('/', async (req, res) => {
     const where = {};
     const andConditions = [];
 
+    let cleanQ = q;
     if (q) {
+      // If user types "MC-1092" based on placeholder, strip "MC-" to search effectively
+      cleanQ = q.replace(/^MC\s*-?\s*/i, '').replace(/^MCOM\s*-?\s*/i, '');
+      
       if (searchField === 'planNo') {
         andConditions.push({
           $or: [
-            { file_no: { $like: `%${q}%` } },
-            { new_file_no: { $like: `%${q}%` } },
-            { old_file_no: { $like: `%${q}%` } },
-            { plan_no: { $like: `%${q}%` } },
+            { plan_no: { $like: `%${cleanQ}%` } },
           ]
         });
       } else if (searchField === 'name') {
         andConditions.push({
           $or: [
-            { name: { $like: `%${q}%` } },
-            { management_corporation_name: { $like: `%${q}%` } },
+            { name: { $like: `%${cleanQ}%` } },
+            { management_corporation_name: { $like: `%${cleanQ}%` } },
           ]
         });
       } else if (searchField === 'planOrName') {
         andConditions.push({
           $or: [
-            { file_no: { $like: `%${q}%` } },
-            { new_file_no: { $like: `%${q}%` } },
-            { old_file_no: { $like: `%${q}%` } },
-            { plan_no: { $like: `%${q}%` } },
-            { name: { $like: `%${q}%` } },
-            { management_corporation_name: { $like: `%${q}%` } },
+            { plan_no: { $like: `%${cleanQ}%` } },
+            { name: { $like: `%${cleanQ}%` } },
+            { management_corporation_name: { $like: `%${cleanQ}%` } },
           ]
         });
       } else {
         andConditions.push({
           $or: [
-            { file_no: { $like: `%${q}%` } },
-            { new_file_no: { $like: `%${q}%` } },
-            { old_file_no: { $like: `%${q}%` } },
-            { plan_no: { $like: `%${q}%` } },
-            { name: { $like: `%${q}%` } },
-            { management_corporation_name: { $like: `%${q}%` } },
-            { address: { $like: `%${q}%` } },
-            { secretary: { $like: `%${q}%` } },
-            { treasurer: { $like: `%${q}%` } },
-            { town: { $like: `%${q}%` } },
+            { file_no: { $like: `%${cleanQ}%` } },
+            { new_file_no: { $like: `%${cleanQ}%` } },
+            { old_file_no: { $like: `%${cleanQ}%` } },
+            { plan_no: { $like: `%${cleanQ}%` } },
+            { name: { $like: `%${cleanQ}%` } },
+            { management_corporation_name: { $like: `%${cleanQ}%` } },
+            { address: { $like: `%${cleanQ}%` } },
+            { secretary: { $like: `%${cleanQ}%` } },
+            { treasurer: { $like: `%${cleanQ}%` } },
+            { town: { $like: `%${cleanQ}%` } },
           ]
         });
       }
@@ -377,8 +376,8 @@ router.get('/', async (req, res) => {
     }
     if (category) andConditions.push({ category });
     if (town) andConditions.push({ town: { $like: `%${town}%` } });
-    if (renewal_vise) andConditions.push({ renewal_date_vise: renewal_vise });
-    if (agm_vise) andConditions.push({ agm_date_vise: agm_vise });
+    if (renewal_vise) andConditions.push({ renewal_date_vise: { $like: `${renewal_vise}%` } });
+    if (agm_vise) andConditions.push({ agm_date_vise: { $like: `${agm_vise}%` } });
 
     if (andConditions.length > 0) {
       where.$and = andConditions;
@@ -480,6 +479,22 @@ router.post('/', async (req, res) => {
       await RegistrationPayableInvoice.create(invoicePayload, { transaction });
 
       await transaction.commit();
+
+      // -- CUSTOMER HISTORY LOG --
+      try {
+        await db.models.CustomerHistory.create({
+          customer_no: data.file_no,
+          mc_type: 'MC',
+          action_type: 'Registration',
+          description: `MC Registered: ${data.name || data.management_corporation_name || ''}`,
+          year: new Date().getFullYear(),
+          file_path: null,
+          action_by: user_name
+        });
+      } catch (histErr) {
+        console.error('Failed to log CustomerHistory on MC creation:', histErr);
+      }
+
       res.status(201).json(record.toJSON());
     } catch (invoiceErr) {
       await transaction.rollback();
@@ -553,7 +568,9 @@ router.patch('/:id', async (req, res) => {
     }
 
     let note = 'Modified record';
-    if (data.status === 'Active' && record.status !== 'Active') {
+    if (req.body.history_note) {
+      note = req.body.history_note;
+    } else if (data.status === 'Active' && record.status !== 'Active') {
       note = 'Approved & Activated record';
     } else if (data.status === 'Non Active' && record.status !== 'Non Active') {
       note = 'Rejected record';
@@ -750,7 +767,7 @@ router.post('/bulk', async (req, res) => {
           modified_by: data.modified_by,
           history: JSON.stringify([{
             name: importUser,
-            action: 'Added',
+            action: 'Bulk Added',
             time: new Date().toISOString()
           }]),
         },
@@ -761,7 +778,7 @@ router.post('/bulk', async (req, res) => {
         inserted++;
       } else {
         const modified_by = data.modified_by || data.user_name || 'Bulk Import Update';
-        const merged = mergeImportPayload(instance.toJSON ? instance.toJSON() : instance, data, { importUser: modified_by });
+        const merged = mergeImportPayload(instance.toJSON ? instance.toJSON() : instance, data, { importUser: modified_by, importAction: 'Bulk Updated' });
         merged.modified_by = modified_by;
         await instance.update(merged, { transaction });
         updated++;
@@ -769,6 +786,16 @@ router.post('/bulk', async (req, res) => {
     }
 
     await transaction.commit();
+    
+    if ((inserted > 0 || updated > 0) && db.models.SystemLog) {
+      const user = records[0]?.user_name || records[0]?.created_by || 'System';
+      await db.models.SystemLog.create({
+        user_name: user,
+        action: 'Bulk Imported MC Records',
+        details: `Imported ${inserted} new records and updated ${updated} existing records`
+      });
+    }
+
     res.json({ success: true, inserted, updated });
   } catch (err) {
     // Roll back all changes if anything fails

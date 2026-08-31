@@ -147,3 +147,28 @@ nav .button {
   margin-top: 8px;
   line-height: 1.75;
 }
+
+/* ── Global Loading Animations ─────────────────────────────────── */
+@keyframes cma-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes cma-progress {
+  0% {
+    margin-left: -40%;
+  }
+
+  50% {
+    margin-left: 60%;
+  }
+
+  100% {
+    margin-left: 110%;
+  }
+}

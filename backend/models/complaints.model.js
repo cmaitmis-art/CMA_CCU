@@ -71,6 +71,30 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: false,
         defaultValue: 'New',
       },
+      assigned_department: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      closed_by: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      closed_department: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      closed_reason: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      closed_document_path: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      closed_document_name: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
       created_by: {
         type: DataTypes.TEXT,
         allowNull: true,

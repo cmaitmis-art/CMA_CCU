@@ -90,6 +90,7 @@ export default function Profile({ currentUser, onUserUpdated }) {
   const [editAvatarFile, setEditAvatarFile] = useState(null);
   const [editAvatarPreview, setEditAvatarPreview] = useState(null);
   const [savingProfile, setSavingProfile] = useState(false);
+  const [viewerImage, setViewerImage] = useState(null);
   const avatarInputRef = useRef(null);
 
 
@@ -136,8 +137,12 @@ export default function Profile({ currentUser, onUserUpdated }) {
       ],
       email: currentUser?.email || `${username}@cma.gov.lk`,
       phone: roleKey === 'ADMIN' ? '+94 11 234 5678' : '+94 11 876 5432',
-      role: roleLabel,
-      department: roleKey === 'ADMIN' ? 'CMA — IT / System Division' : 'CMA — CCU Division',
+      role: currentUser?.designation || roleLabel,
+      department: currentUser?.department || (
+                  roleKey === 'ADMIN' ? 'CMA — IT / System Division' :
+                  roleKey === 'TECHNICAL' ? 'CMA — Technical Division' :
+                  roleKey === 'LEGAL' ? 'CMA — Legal Division' :
+                  'CMA — CCU Division'),
       year: '2026',
       timeline: timelineItems.length > 0 ? timelineItems : [
         { time: 'Active', text: 'No recent activity logs recorded for your account yet.' }
@@ -308,6 +313,7 @@ export default function Profile({ currentUser, onUserUpdated }) {
       const params = new URLSearchParams({
         name: currentUser.name || '',
         username: currentUser.username || '',
+        user_id: currentUser.id || '',
       });
       const resp = await fetch(`${resolveApiUrl('/daily-activities/user-timeline')}?${params.toString()}`);
       const data = await resp.json();
@@ -347,6 +353,7 @@ export default function Profile({ currentUser, onUserUpdated }) {
       const params = new URLSearchParams({
         name: currentUser.name || '',
         username: currentUser.username || '',
+        user_id: currentUser.id || '',
         limit: '1000',
         all: 'true',
       });
@@ -671,7 +678,7 @@ export default function Profile({ currentUser, onUserUpdated }) {
 
   return (
     <div className="cma-page" style={{ background: theme.bg }}>
-      <div style={{ maxWidth: 920, margin: '0 auto' }}>
+      <div style={{ width: '100%', margin: '0 auto' }}>
         {/* Header Card */}
         <div className="card" style={{ marginBottom: 18 }}>
           <div
@@ -693,10 +700,16 @@ export default function Profile({ currentUser, onUserUpdated }) {
                 flexShrink: 0,
                 overflow: 'hidden',
                 position: 'relative',
-                cursor: isEditingProfile ? 'pointer' : 'default',
+                cursor: (isEditingProfile || editAvatarPreview || currentUser?.avatar_url) ? 'pointer' : 'default',
               }}
-              onClick={() => isEditingProfile && avatarInputRef.current?.click()}
-              title={isEditingProfile ? "Click to change avatar" : ""}
+              onClick={() => {
+                if (isEditingProfile) {
+                  avatarInputRef.current?.click();
+                } else if (editAvatarPreview || currentUser?.avatar_url) {
+                  setViewerImage(editAvatarPreview || currentUser?.avatar_url);
+                }
+              }}
+              title={isEditingProfile ? "Click to change avatar" : (editAvatarPreview || currentUser?.avatar_url) ? "Click to view full image" : ""}
             >
               {editAvatarPreview || currentUser?.avatar_url ? (
                 <img
@@ -1346,6 +1359,20 @@ export default function Profile({ currentUser, onUserUpdated }) {
           </div>
         </div>
       )}
+      {/* ── Image Viewer Modal ── */}
+      {viewerImage && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+          onClick={() => setViewerImage(null)}>
+          <img src={viewerImage} alt="Full View" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 8, boxShadow: '0 4px 30px rgba(0,0,0,0.5)', animation: 'fadeSlideIn .2s ease' }} onClick={(e) => e.stopPropagation()} />
+          <button onClick={() => setViewerImage(null)} style={{ position: 'absolute', top: 20, right: 20, background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', fontSize: 24, width: 44, height: 44, borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: '0.2s' }}
+            onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.3)'}
+            onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
+            title="Close">
+            <i className="fas fa-times"></i>
+          </button>
+        </div>
+      )}
+
       {toast && (
         <div
           style={{

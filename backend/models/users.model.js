@@ -24,6 +24,14 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.TEXT,
         allowNull: false,
       },
+      department: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      designation: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
       email: {
         type: DataTypes.TEXT,
         allowNull: true,

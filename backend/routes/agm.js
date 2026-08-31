@@ -14,7 +14,7 @@ if (!fs.existsSync(uploadsDir)) {
 // GET /api/agm - List all MCs and their AGM records
 router.get('/', async (req, res) => {
   try {
-    const { q, status, year, month, page = 1, limit = 20 } = req.query;
+    const { q, status, year, month, meetingType, page = 1, limit = 20 } = req.query;
     const offset = (Math.max(1, Number(page)) - 1) * Math.max(1, Number(limit));
 
     const where = {};
@@ -33,6 +33,9 @@ router.get('/', async (req, res) => {
     }
     if (status) {
       andConditions.push({ agm_date_vise: status });
+    }
+    if (meetingType) {
+      andConditions.push({ agm_meeting_type: meetingType });
     }
     if (month) {
       if (month.includes('-')) {

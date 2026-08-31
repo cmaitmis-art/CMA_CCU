@@ -18,6 +18,16 @@ router.get('/stream', (req, res) => {
     'Connection': 'keep-alive',
   });
 
+  // Tell the browser to wait 5 seconds before trying to reconnect if the connection drops.
+  // This prevents the frontend from immediately hammering the vite proxy while the backend is restarting,
+  // which avoids the "ECONNREFUSED" proxy errors in the terminal.
+  res.write('retry: 5000\n\n');
+
+  // Send a heartbeat every 15 seconds to keep the connection alive
+  const heartbeat = setInterval(() => {
+    res.write(': heartbeat\n\n');
+  }, 15000);
+
   const onNewNotification = (notification) => {
     res.write(`data: ${JSON.stringify(notification)}\n\n`);
   };
@@ -25,6 +35,7 @@ router.get('/stream', (req, res) => {
   notificationEmitter.on('new', onNewNotification);
 
   req.on('close', () => {
+    clearInterval(heartbeat);
     notificationEmitter.removeListener('new', onNewNotification);
   });
 });
@@ -42,7 +53,7 @@ router.get('/stream', (req, res) => {
  */
 router.get('/', async (req, res) => {
   try {
-    const { user_id, role } = req.query;
+    const { user_id, role, include_all } = req.query;
 
     // Fetch all recent notifications
     const allNotifications = await db.models.Notification.findAll({
@@ -50,14 +61,25 @@ router.get('/', async (req, res) => {
       limit: 200,
     });
 
-    // Filter by target_role if role provided
+    // Filter by target_role if role provided (Admin role can see all notifications)
     let filtered = allNotifications.filter((n) => {
-      if (!n.target_role) return true; // broadcast to all
-      if (!role) return true;          // no role filter requested
-      return String(n.target_role).toUpperCase() === String(role).toUpperCase();
+      const userRole = String(role).toUpperCase();
+      if (userRole === 'ADMIN') return true; // Admin bypass
+      
+      if (!n.target_role) {
+        // It's a broadcast to all, BUT we exclude specific specialized departments
+        // like Technical or Legal so their notification feed isn't cluttered.
+        if (userRole.includes('TECHNICAL') || userRole.includes('LEGAL')) return false;
+        return true; 
+      }
+      
+      // If there is a specific target_role
+      if (!role) return true; // no role filter requested
+      return String(n.target_role).toUpperCase() === userRole;
     });
 
-    // Exclude notifications already dismissed by this user
+    // Exclude notifications already dismissed by this user (unless include_all=true)
+    let dismissedIds = new Set();
     if (user_id) {
       const uid = parseInt(user_id, 10);
       if (!isNaN(uid)) {
@@ -65,9 +87,20 @@ router.get('/', async (req, res) => {
           where: { user_id: uid },
           attributes: ['notification_id'],
         });
-        const dismissedIds = new Set(reads.map((r) => r.notification_id));
-        filtered = filtered.filter((n) => !dismissedIds.has(n.id));
+        dismissedIds = new Set(reads.map((r) => r.notification_id));
+
+        if (include_all !== 'true') {
+          filtered = filtered.filter((n) => !dismissedIds.has(n.id));
+        }
       }
+    }
+
+    // Attach dismissed flag when include_all is requested
+    if (include_all === 'true') {
+      filtered = filtered.map(n => ({
+        ...n.toJSON(),
+        dismissed: dismissedIds.has(n.id),
+      }));
     }
 
     res.json({ success: true, notifications: filtered });
@@ -76,6 +109,7 @@ router.get('/', async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error fetching notifications' });
   }
 });
+
 
 /**
  * POST /api/notifications
@@ -131,6 +165,30 @@ router.post('/:id/dismiss', async (req, res) => {
   } catch (error) {
     console.error('Error dismissing notification:', error);
     res.status(500).json({ success: false, message: 'Server error dismissing notification' });
+  }
+});
+
+/**
+ * DELETE /api/notifications/:id/dismiss
+ *
+ * Un-dismisses (restores) a notification for a specific user.
+ * Query param: ?user_id=<id>
+ */
+router.delete('/:id/dismiss', async (req, res) => {
+  try {
+    const notification_id = parseInt(req.params.id, 10);
+    const user_id = parseInt(req.query?.user_id || req.body?.user_id, 10);
+
+    if (isNaN(notification_id) || isNaN(user_id)) {
+      return res.status(400).json({ success: false, message: 'Invalid notification_id or user_id' });
+    }
+
+    await db.models.NotificationRead.destroy({ where: { user_id, notification_id } });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error un-dismissing notification:', error);
+    res.status(500).json({ success: false, message: 'Server error un-dismissing notification' });
   }
 });
 

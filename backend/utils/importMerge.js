@@ -4,7 +4,7 @@ function normalizeBlank(value) {
   return value;
 }
 
-function mergeImportPayload(existing = {}, incoming = {}, { importUser = 'Bulk Import' } = {}) {
+function mergeImportPayload(existing = {}, incoming = {}, { importUser = 'Bulk Import', importAction = 'Modified' } = {}) {
   const merged = { ...existing, ...incoming };
   const out = {};
 
@@ -36,7 +36,6 @@ function mergeImportPayload(existing = {}, incoming = {}, { importUser = 'Bulk I
     }
   }
 
-  const incomingHistory = Array.isArray(incoming.history) ? incoming.history : [];
   const existingHistory = (() => {
     try {
       return typeof existing.history === 'string' ? JSON.parse(existing.history) : (existing.history || []);
@@ -45,25 +44,13 @@ function mergeImportPayload(existing = {}, incoming = {}, { importUser = 'Bulk I
     }
   })();
 
-  const mergedHistory = [...existingHistory, ...incomingHistory];
-  if (mergedHistory.length > 0) {
-    const lastAction = incomingHistory[incomingHistory.length - 1];
-    if (lastAction) {
-      const note = lastAction.action || 'Modified';
-      const entry = {
-        name: incoming.modified_by || incoming.user_name || importUser,
-        action: note,
-        time: lastAction.time || new Date().toISOString(),
-      };
-      mergedHistory.push(entry);
-    } else if (existingHistory.length > 0) {
-      mergedHistory.push({
-        name: incoming.modified_by || incoming.user_name || importUser,
-        action: 'Modified',
-        time: new Date().toISOString(),
-      });
-    }
-  }
+  const mergedHistory = [...existingHistory];
+  
+  mergedHistory.push({
+    name: incoming.modified_by || incoming.user_name || importUser,
+    action: importAction,
+    time: new Date().toISOString(),
+  });
 
   out.history = JSON.stringify(mergedHistory);
   return out;

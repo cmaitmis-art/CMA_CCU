@@ -35,6 +35,8 @@ router.post('/documents', async (req, res) => {
 
     const created = [];
 
+    const createdBy = req.body.created_by || 'System';
+
     for (const f of files) {
       const ext = fileExt(f.name);
       if (ALLOWED_EXT.size && !ALLOWED_EXT.has(ext)) {
@@ -59,6 +61,8 @@ router.post('/documents', async (req, res) => {
         mime_type: f.mimetype,
         size: f.size,
         storage_path: relPath,
+        created_by: createdBy,
+        updated_by: createdBy,
       });
 
       created.push({

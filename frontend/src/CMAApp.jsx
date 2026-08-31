@@ -5,7 +5,13 @@ import Dashboard from './pages/Dashboard_enhanced.jsx'; // Landing page eagerly 
 import CMALogin from './pages/Login.jsx';
 import WelcomeAlert from './components/WelcomeAlert.jsx';
 import PopupAlerts from './components/PopupAlerts.jsx';
+import AIChatWidget from './components/AIChatWidget.jsx';
 import Logger from './utils/logger.js';
+import { syncServerTime } from './utils/serverTime.js';
+
+// Sync server time as early as possible
+syncServerTime();
+
 
 // Lazily load other pages
 const ActivityLogs = lazy(() => import('./pages/ActivityLogs'));
@@ -14,6 +20,7 @@ const MComManagement = lazy(() => import('./pages/MComManagement')); // Fixed ca
 const CFiles = lazy(() => import('./pages/CFiles'));
 const Complaints = lazy(() => import('./pages/Complaints'));
 const Discussions = lazy(() => import('./pages/Discussions'));
+const Notifications = lazy(() => import('./pages/Notifications'));
 const RegistrationForm = lazy(() => import('./pages/RegistrationForm'));
 const Records = lazy(() => import('./pages/Records'));
 const Reports = lazy(() => import('./pages/Reports'));
@@ -21,6 +28,7 @@ const Profile = lazy(() => import('./pages/Profile'));
 const UserAdmin = lazy(() => import('./pages/UserAdmin'));
 const MCRenewalPortal = lazy(() => import('./pages/MCRenewalPortal'));
 const MCRenewalApproval = lazy(() => import('./pages/MCRenewalApproval'));
+const CustomerHistory = lazy(() => import('./pages/CustomerHistory'));
 
 import './CMAStyles.css';
 import { ConfirmDialogProvider } from './ConfirmDialogContext.jsx';
@@ -60,24 +68,46 @@ function CMAApp() {
 
   const [showWelcome, setShowWelcome] = useState(false);
 
+  const getFirstAvailablePage = (user) => {
+    if (!user) return 'dashboard';
+    if (user.role?.toLowerCase() === 'admin') return 'dashboard';
+    const managedModules = ['dashboard', 'registration', 'renewal_approval', 'mc', 'mcom', 'cfiles', 'complains', 'discussion', 'notifications', 'records', 'customer_history', 'reports', 'users', 'profile'];
+    for (const mod of managedModules) {
+      if (user.permissions?.[mod]?.includes('view')) return mod;
+    }
+    return 'notifications';
+  };
+
+  const hasAccess = (modId) => {
+    if (currentUser?.role?.toLowerCase() === 'admin') return true;
+    const managedModules = ['dashboard', 'registration', 'renewal_approval', 'mc', 'mcom', 'cfiles', 'complains', 'discussion', 'notifications', 'records', 'customer_history', 'reports', 'users', 'profile'];
+    if (!managedModules.includes(modId)) return true;
+    return currentUser?.permissions?.[modId]?.includes('view');
+  };
+
   const [currentPage, setCurrentPage] = useState(() => {
     const saved = sessionStorage.getItem('cma_currentPage');
     const allowed = new Set([
-      'dashboard',
-      'mc',
-      'mcom',
-      'cfiles',
-      'complains',
-      'discussion',
-      'registration',
-      'records',
-      'reports',
-      'users',
-      'profile',
-      'renewal_approval',
+      'dashboard', 'mc', 'mcom', 'cfiles', 'complains', 'discussion',
+      'notifications', 'registration', 'records', 'reports', 'users',
+      'profile', 'renewal_approval', 'customer_history',
     ]);
 
-    return allowed.has(saved) ? saved : 'dashboard';
+    let initialPage = allowed.has(saved) ? saved : 'dashboard';
+
+    if (currentUser) {
+      const hasAccessInit = (modId) => {
+        if (currentUser.role?.toLowerCase() === 'admin') return true;
+        const managedModules = ['dashboard', 'registration', 'renewal_approval', 'mc', 'mcom', 'cfiles', 'complains', 'discussion', 'notifications', 'records', 'customer_history', 'reports', 'users', 'profile'];
+        if (!managedModules.includes(modId)) return true;
+        return currentUser.permissions?.[modId]?.includes('view');
+      };
+      if (!hasAccessInit(initialPage)) {
+        initialPage = getFirstAvailablePage(currentUser);
+      }
+    }
+
+    return initialPage;
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
@@ -96,12 +126,14 @@ function CMAApp() {
     cfiles: CFiles,
     complains: Complaints,
     discussion: Discussions,
+    notifications: Notifications,
     registration: RegistrationForm,
     records: Records,
     reports: Reports,
     users: UserAdmin,
     profile: Profile,
     renewal_approval: MCRenewalApproval,
+    customer_history: CustomerHistory,
   };
 
   const CurrentPage = pages[currentPage] || Dashboard;
@@ -110,6 +142,7 @@ function CMAApp() {
     if (page === 'activitylogs') {
       setShowActivityLogs(true);
     } else if (page !== currentPage) {
+      if (!hasAccess(page)) return;
       // Show page loading bar briefly
       setPageLoading(true);
       if (pageLoadTimer.current) clearTimeout(pageLoadTimer.current);
@@ -147,7 +180,11 @@ function CMAApp() {
     setCurrentUser(sessionUser);
     sessionStorage.setItem('cma_currentUser', JSON.stringify(sessionUser));
     sessionStorage.removeItem('cma_dashboard_reminder_shown');
-    setCurrentPage('dashboard');
+    
+    // Redirect to the first available page based on permissions
+    const firstPage = getFirstAvailablePage(sessionUser);
+    setCurrentPage(firstPage);
+    
     setShowWelcome(true);
 
     // Log user login
@@ -178,14 +215,24 @@ function CMAApp() {
   };
 
   useEffect(() => {
-    if (!currentUser) return;
-    // Ping right away on load/login
-    pingUser(currentUser.id).catch(() => { });
-    const interval = setInterval(() => {
-      pingUser(currentUser.id).catch(() => { });
-    }, 60000);
+    if (!currentUser?.id) return;
+    const pingAndUpdate = async () => {
+      try {
+        const res = await pingUser(currentUser.id);
+        if (res?.success && res.user) {
+          const refreshed = buildUserSession({ ...currentUser, ...res.user });
+          if (JSON.stringify(refreshed) !== JSON.stringify(currentUser)) {
+            setCurrentUser(refreshed);
+            sessionStorage.setItem('cma_currentUser', JSON.stringify(refreshed));
+          }
+        }
+      } catch (e) { }
+    };
+
+    pingAndUpdate();
+    const interval = setInterval(pingAndUpdate, 60000);
     return () => clearInterval(interval);
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   const handleLogout = () => {
     const username = currentUser?.username;
@@ -228,14 +275,7 @@ function CMAApp() {
         <div className="cma-main-wrap">
           <Topbar currentUser={currentUser} currentPage={currentPage} onToggleSidebar={() => { if (window.innerWidth <= 768) { setSidebarOpen(!sidebarOpen); } else { setIsSidebarCollapsed(!isSidebarCollapsed); } }} onLogout={handleLogout} onNavigate={handleNavigate} />
           <main className="cma-main">
-            {pageLoading && (
-              <div style={{
-                position: 'fixed', top: 60, left: 0, right: 0, height: 3, zIndex: 500,
-                background: 'linear-gradient(90deg, transparent, #1a3a6b, #c9a84c, #1a3a6b, transparent)',
-                backgroundSize: '200% 100%',
-                animation: 'navbarSlide .4s ease forwards',
-              }} />
-            )}
+
             <div key={currentPage} style={{ animation: 'fadeIn 0.22s ease' }}>
               <Suspense fallback={
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', gap: 16 }}>
@@ -245,11 +285,11 @@ function CMAApp() {
                       100% { transform: rotate(360deg); }
                     }
                   `}</style>
-                  <div style={{ width: 40, height: 40, borderRadius: '50%', border: '3px solid #e2e8f0', borderTopColor: '#1a3a6b', animation: 'pageSpin 0.8s linear infinite' }} />
+                  <i className="fas fa-circle-notch" style={{ fontSize: 32, color: '#1a3a6b', animation: 'pageSpin 1s linear infinite' }} />
                   <span style={{ fontSize: 13, color: '#5a6478', fontWeight: 500 }}>Loading page...</span>
                 </div>
               }>
-                <CurrentPage onNavigate={handleNavigate} currentUser={currentUser} isViewOnly={isViewOnlyRole(currentUser?.role)} onUserUpdated={handleUserUpdated} />
+                <CurrentPage onNavigate={handleNavigate} currentUser={currentUser} onUserUpdated={handleUserUpdated} />
               </Suspense>
             </div>
           </main>
@@ -260,6 +300,7 @@ function CMAApp() {
           </Suspense>
         )}
         <PopupAlerts currentUser={currentUser} onNavigate={handleNavigate} />
+        <AIChatWidget />
       </div>
     </ConfirmDialogProvider>
   );

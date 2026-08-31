@@ -14,6 +14,7 @@ import {
   thActionsStyle,
   tdActionsStyle,
 } from '../components/mc-management/MCManagementShared.jsx';
+import { TransferModal, CloseModal, ActionBtn } from '../components/c-files/CFilesShared.jsx';
 window.XLSX = XLSX;
 
 const theme = {
@@ -776,8 +777,13 @@ export default function CFiles({ currentUser }) {
     ? `${currentUser.name} (${currentUser.username})`
     : currentUser?.name || currentUser?.username || '';
 
+  const isLegal = String(currentUser?.department || '').trim().toLowerCase() === 'legal';
+  const isTechnical = String(currentUser?.department || '').trim().toLowerCase() === 'technical';
+  const isDeptUser = isLegal ? 'LEGAL' : isTechnical ? 'TECHNICAL' : null;
+
   const [cfiles, setCfiles] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isImporting, setIsImporting] = useState(false);
   const [searchTerm, setSearchTerm] = useState(() => {
     return sessionStorage.getItem('cma_cf_searchTerm') || '';
   });
@@ -831,6 +837,9 @@ export default function CFiles({ currentUser }) {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [selectedHistoryRecord, setSelectedHistoryRecord] = useState(null);
   const [editingRecord, setEditingRecord] = useState(null);
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [showCloseModal, setShowCloseModal] = useState(false);
+  const [actionRecord, setActionRecord] = useState(null);
   const [lastImportedFileNos, setLastImportedFileNos] = useState([]);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -856,6 +865,7 @@ export default function CFiles({ currentUser }) {
         if (yearFilter) params.append('year', yearFilter);
         if (monthFilter) params.append('month', monthFilter);
       }
+      if (isDeptUser) params.append('department', isDeptUser);
 
       const r = await fetch(`${API_BASE}/cfiles?${params.toString()}`);
       const data = await r.json();
@@ -977,6 +987,68 @@ export default function CFiles({ currentUser }) {
     }
   }
 
+  async function handleTransfer(department) {
+    try {
+      const API_BASE = (import.meta.env.VITE_API_URL || '/api').trim();
+      const r = await fetch(`${API_BASE}/cfiles/${actionRecord.id}/transfer`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          assigned_department: department, 
+          user_name: auditUserLabel,
+          from_department: currentUser?.department || 'ADMIN' 
+        }),
+      });
+      if (!r.ok) throw new Error('Failed to transfer');
+
+      if (department !== 'CCU') {
+        fetch(`${API_BASE}/notifications`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'info',
+            title: 'C-File Transferred',
+            message: `C-File ${actionRecord.file_no || ''} has been transferred to your department by ${auditUserLabel}.`,
+            target_role: department,
+            link: `cfiles:${actionRecord.id}`
+          })
+        }).catch(() => {});
+      }
+
+      showToast(department === 'CCU' ? 'Returned to CCU (Admin) ✅' : `Transferred to ${department} ✅`);
+      setShowTransferModal(false);
+      setActionRecord(null);
+      load();
+    } catch (err) {
+      showToast(err.message || 'Transfer failed', 'error');
+    }
+  }
+
+  async function handleCloseCase(reason, fileObj) {
+    try {
+      const API_BASE = (import.meta.env.VITE_API_URL || '/api').trim();
+      const formData = new FormData();
+      formData.append('closed_reason', reason);
+      formData.append('closed_department', isDeptUser || 'ADMIN');
+      formData.append('user_name', auditUserLabel);
+      if (fileObj) {
+        formData.append('document', fileObj);
+      }
+
+      const r = await fetch(`${API_BASE}/cfiles/${actionRecord.id}/close`, {
+        method: 'PUT',
+        body: formData,
+      });
+      if (!r.ok) throw new Error('Failed to close');
+      showToast('C-File Closed ✅');
+      setShowCloseModal(false);
+      setActionRecord(null);
+      load();
+    } catch (err) {
+      showToast(err.message || 'Close failed', 'error');
+    }
+  }
+
   async function handleDeleteImported() {
     if (!lastImportedFileNos || !lastImportedFileNos.length) return showToast('No imported batch to delete', 'error');
     const confirmed = await confirm({
@@ -1091,6 +1163,7 @@ export default function CFiles({ currentUser }) {
     if (!file) return;
     if (typeof window.XLSX === 'undefined') return showToast('XLSX library not loaded', 'error');
     try {
+      setIsImporting(true);
       const data = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (ev) => resolve(ev.target.result);
@@ -1151,6 +1224,7 @@ export default function CFiles({ currentUser }) {
       showToast(err.message || 'Import failed', 'error');
       console.error('Import error:', err);
     } finally {
+      setIsImporting(false);
       e.target.value = '';
     }
   }
@@ -1433,7 +1507,7 @@ export default function CFiles({ currentUser }) {
 
         {/* Table */}
         <div className="mc-table-wrapper" style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 380px)', minHeight: '200px', overflowY: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed', minWidth: 1955 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed', minWidth: 2600 }}>
             <thead>
               <tr>
                 {Object.keys(COL_WIDTHS).map((label) => (
@@ -1455,9 +1529,11 @@ export default function CFiles({ currentUser }) {
                   return (
                     <tr
                       key={cf.id}
+                      onClick={() => { setSelectedRecord(cf); setShowViewModal(true); }}
                       style={{
                         borderBottom: `1px solid ${theme.border}`,
                         background: isPending ? '#fffbeb' : 'transparent',
+                        cursor: 'pointer',
                       }}
                       onMouseEnter={(e) => (e.currentTarget.style.background = isPending ? '#fef3c7' : '#f8fafc')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = isPending ? '#fffbeb' : '')}
@@ -1480,27 +1556,21 @@ export default function CFiles({ currentUser }) {
                           fontSize: 12,
                           fontWeight: 600,
                         }}>
-                          {cf.status}
+                          {cf.status === 'Transferred' && cf.assigned_department ? `Transferred to ${cf.assigned_department}` : cf.status}
                         </span>
                       </td>
                       <td className="mc-td-actions" style={tdActionsStyle}>
                         <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-start', alignItems: 'center' }}>
-                          <button onClick={() => { setSelectedRecord(cf); setShowViewModal(true); }}
-                            style={{ background: 'none', border: 'none', color: theme.blue, cursor: 'pointer', fontSize: 14, padding: 4 }} title="View">
-                            <i className="fas fa-eye" />
-                          </button>
-                          <button onClick={() => { setSelectedHistoryRecord(cf); setShowHistoryModal(true); }}
-                            style={{ background: 'none', border: 'none', color: theme.text2, cursor: 'pointer', fontSize: 14, padding: 4 }} title="History">
-                            <i className="fas fa-history" />
-                          </button>
-                          <button onClick={() => { setEditingRecord(cf); setShowFormModal(true); }}
-                            style={{ background: 'none', border: 'none', color: theme.orange, cursor: 'pointer', fontSize: 14, padding: 4 }} title="Edit">
-                            <i className="fas fa-edit" />
-                          </button>
-                          <button onClick={() => handleDeleteRecord(cf.id)}
-                            style={{ background: 'none', border: 'none', color: theme.red, cursor: 'pointer', fontSize: 14, padding: 4 }} title="Delete">
-                            <i className="fas fa-trash" />
-                          </button>
+                          <ActionBtn icon="fas fa-eye" color={theme.blue} title="View" onClick={(e) => { e.stopPropagation(); setSelectedRecord(cf); setShowViewModal(true); }} />
+                          <ActionBtn icon="fas fa-history" color={theme.text2} title="History" onClick={(e) => { e.stopPropagation(); setSelectedHistoryRecord(cf); setShowHistoryModal(true); }} />
+                          <ActionBtn icon="fas fa-edit" color={theme.orange} title="Edit" onClick={(e) => { e.stopPropagation(); setEditingRecord(cf); setShowFormModal(true); }} />
+                          <ActionBtn icon="fas fa-trash" color={theme.red} title="Delete" onClick={(e) => { e.stopPropagation(); handleDeleteRecord(cf.id); }} />
+                          {cf.status !== 'Closed' && (
+                            <ActionBtn icon="fas fa-share" color={theme.blue} title="Transfer" onClick={(e) => { e.stopPropagation(); setActionRecord(cf); setShowTransferModal(true); }} />
+                          )}
+                          {cf.status !== 'Closed' && (
+                            <ActionBtn icon="fas fa-check-circle" color={theme.green} title="Close" onClick={(e) => { e.stopPropagation(); setActionRecord(cf); setShowCloseModal(true); }} />
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1535,6 +1605,21 @@ export default function CFiles({ currentUser }) {
         theme={theme}
       />
 
+      <TransferModal
+        isOpen={showTransferModal}
+        onClose={() => { setShowTransferModal(false); setActionRecord(null); }}
+        onSave={handleTransfer}
+        record={actionRecord}
+        currentUser={currentUser}
+      />
+
+      <CloseModal
+        isOpen={showCloseModal}
+        onClose={() => { setShowCloseModal(false); setActionRecord(null); }}
+        onSave={handleCloseCase}
+        record={actionRecord}
+      />
+
       {showExportModal && (
         <GenericExportModal
           title="Export C-Files Records"
@@ -1562,6 +1647,12 @@ export default function CFiles({ currentUser }) {
           zIndex: 1000,
         }}>
           {toast.msg}
+        </div>
+      )}
+
+      {isImporting && (
+        <div className="mc-overlay" style={{ zIndex: 10000, background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(4px)' }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: theme.text }}>Importing Data...</div>
         </div>
       )}
     </div>

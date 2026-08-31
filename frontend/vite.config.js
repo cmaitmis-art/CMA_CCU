@@ -1,4 +1,4 @@
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig, loadEnv, createLogger } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
@@ -7,7 +7,15 @@ export default defineConfig(({ mode }) => {
   const proxyTarget = (env.VITE_PROXY_TARGET || '').trim() ||
     (apiUrl.startsWith('http') ? apiUrl.replace(/\/api\/?$/, '') : 'http://127.0.0.1:3001');
 
+  const logger = createLogger();
+  const originalError = logger.error;
+  logger.error = (msg, options) => {
+    if (msg.includes('ECONNREFUSED') || msg.includes('ECONNRESET')) return;
+    originalError(msg, options);
+  };
+
   return {
+    customLogger: logger,
     plugins: [react()],
 
     server: {
@@ -19,6 +27,20 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: false,
           ws: true,
+          configure: (proxy, _options) => {
+            proxy.on('error', (err, _req, res) => {
+              if (err.code === 'ECONNREFUSED' || err.code === 'ECONNRESET') {
+                if (!res.headersSent) {
+                  try {
+                    res.writeHead(502, { 'Content-Type': 'text/plain' });
+                    res.end('Bad Gateway');
+                  } catch (e) {
+                    // Ignore
+                  }
+                }
+              }
+            });
+          }
         },
         '/uploads': {
           target: proxyTarget,

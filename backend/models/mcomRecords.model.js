@@ -134,6 +134,10 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER,
         allowNull: true,
       },
+      renewal_paid_years: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
       renewal_receipt_no: {
         type: DataTypes.TEXT,
         allowNull: true,
@@ -149,7 +153,7 @@ module.exports = (sequelize, DataTypes) => {
       renewal_payment_status: {
         type: DataTypes.TEXT,
         allowNull: true,
-        defaultValue: 'Pending',
+        defaultValue: null,
       },
       next_renewal_date: {
         type: DataTypes.DATEONLY,
@@ -205,7 +209,7 @@ module.exports = (sequelize, DataTypes) => {
       status: {
         type: DataTypes.TEXT,
         allowNull: true,
-        defaultValue: 'New',
+        defaultValue: 'Active',
       },
 
       // Audit fields

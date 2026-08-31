@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { hasPermission } from '../utils/roleLabel.js';
 import { createMC, createNotification, fetchMCsFiltered } from '../api';
 import { useConfirmDialog } from '../ConfirmDialogContext.jsx';
 import { serializeCouncilMembers } from '../utils/mcManagementUtils.js';
@@ -47,7 +48,7 @@ const SEMI_LUXURY_TRIGGER_FIELDS = ['fac_gym', 'fac_swimming_pool'];
 
 const initialFormState = () => ({
   // Filing Info
-  new_file_no: '',
+  new_file_no: 'CMA/CCU/',
   old_file_no: '',
   reg_date: new Date().toISOString().slice(0, 10),
 
@@ -116,7 +117,16 @@ const initialFormState = () => ({
   written_assurance_fulfilled: false,
 });
 
-export default function RegistrationForm({ currentUser, isViewOnly, onNavigate }) {
+export default function RegistrationForm({ currentUser, onNavigate }) {
+  const canEdit = hasPermission(currentUser, 'registration', 'edit');
+  const canDelete = hasPermission(currentUser, 'registration', 'delete');
+  const canCreate = hasPermission(currentUser, 'registration', 'create');
+  const canApprove = hasPermission(currentUser, 'registration', 'approve');
+  const canViewOnly = !canEdit && !canDelete && !canCreate && !canApprove; // fallback
+
+
+
+
   const { settings } = useSettings();
   const CATEGORY_RATES = settings.mc_category_rates;
   const SSCL_RATE = settings.sscl_rate;
@@ -492,20 +502,45 @@ export default function RegistrationForm({ currentUser, isViewOnly, onNavigate }
             .page-header-banner{padding:18px}
           }
 
-          /* ===== Registration receipt (print-only) ===== */
-          .print-receipt{ display:none; }
+          /* ===== Registration receipt & Official Form (print-only) ===== */
+          .print-receipt, .print-official-form { display: none; }
           .receipt-print-mode .page-header-banner,
           .receipt-print-mode .reg-form-flow,
           .receipt-print-mode .reg-footer-actions,
-          .receipt-print-mode .btn{ display:none !important; }
-          .receipt-print-mode .print-receipt{ display:block !important; }
-          @media print{
-            @page { size: A4; margin: 0 !important; }
-            html, body { margin: 0; padding: 0; height: 100%; overflow: hidden !important; }
+          .receipt-print-mode .btn { display: none !important; }
+          .receipt-print-mode .print-receipt,
+          .receipt-print-mode .print-official-form { display: block !important; }
+          
+          @media print {
+            @page { size: A4; margin: 5mm; }
+            html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
             body * { visibility: hidden !important; }
-            .print-receipt, .print-receipt * { visibility: visible !important; }
-            .print-receipt { display: block !important; position: absolute; left: 0; top: 15mm; right: 0; margin: 0; padding: 0 10mm; width: 100%; }
+            .cma-page, .cma-page * { visibility: visible !important; }
+            .page-header-banner, .reg-form-flow, .reg-footer-actions, .btn { display: none !important; }
+            .print-official-form { display: block !important; }
+            .print-receipt { display: block !important; page-break-before: always; margin-top: 15px; }
           }
+
+          .print-official-form {
+            max-width: 760px; margin: 0 auto; padding: 0 10px; font-family: 'Times New Roman', Times, serif; color: #000; font-size: 12px; line-height: 1.2;
+          }
+          .print-official-form .of-head { text-align: center; margin-bottom: 10px; }
+          .print-official-form .of-head img { width: 65px; height: auto; margin-bottom: 2px; }
+          .print-official-form .of-title { font-size: 15px; font-weight: bold; margin-bottom: 2px; }
+          .print-official-form .of-subtitle { font-size: 13px; font-weight: bold; text-decoration: underline; }
+          .print-official-form .of-row { display: flex; align-items: flex-end; margin-bottom: 4px; }
+          .print-official-form .of-label { font-weight: bold; margin-right: 5px; white-space: nowrap; }
+          .print-official-form .of-value { flex: 1; border-bottom: 1px dashed #000; min-height: 14px; font-weight: normal; }
+          .print-official-form .of-sub-row { display: flex; align-items: flex-end; margin-bottom: 2px; padding-left: 20px; }
+          .print-official-form .of-section-title { font-weight: bold; margin-top: 8px; margin-bottom: 4px; font-size: 12px; }
+          .print-official-form .of-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding-left: 20px; }
+          .print-official-form .of-checkbox { display: inline-flex; align-items: center; gap: 4px; }
+          .print-official-form .of-box { width: 11px; height: 11px; border: 1px solid #000; display: inline-block; text-align: center; line-height: 11px; font-size: 9px; font-weight: bold; }
+          .print-official-form .of-table { width: 100%; border-collapse: collapse; margin-top: 4px; margin-bottom: 8px; }
+          .print-official-form .of-table th, .print-official-form .of-table td { border: 1px solid #000; padding: 2px 4px; text-align: left; font-size: 11.5px; }
+          .print-official-form .of-table th { font-weight: bold; }
+          .print-official-form .of-signatures { display: flex; justify-content: space-between; margin-top: 25px; }
+          .print-official-form .of-signatures > div { width: 40%; text-align: center; border-top: 1px solid #000; padding-top: 3px; font-size: 12px; }
           .print-receipt{
             max-width:680px;margin:0 auto;padding:24px;font-family:'Times New Roman',serif;color:#111;
           }
@@ -537,12 +572,12 @@ export default function RegistrationForm({ currentUser, isViewOnly, onNavigate }
           </div>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
-          {!isViewOnly && (
+          {canEdit && (
             <button className="btn btn-outline" style={{ color: '#fff', borderColor: 'rgba(255,255,255,0.4)' }} onClick={() => handleSave(null, true)} disabled={isSubmitting}>
               <i className="fas fa-save" style={{ marginRight: 6 }} /> Save Draft
             </button>
           )}
-          {!isViewOnly && (
+          {canEdit && (
             <button className="btn btn-gold" onClick={handleSave} disabled={isSubmitting}>
               <i className="fas fa-check" style={{ marginRight: 6 }} /> Save Registration
             </button>
@@ -1159,7 +1194,7 @@ export default function RegistrationForm({ currentUser, isViewOnly, onNavigate }
 
         {/* Footer Actions */}
         <div className="reg-footer-actions">
-          {!isViewOnly && (
+          {canEdit && (
             <button type="button" className="btn btn-outline" onClick={handleClear} disabled={isSubmitting}>
               <i className="fas fa-eraser" style={{ marginRight: 6 }} /> Clear
             </button>
@@ -1167,13 +1202,160 @@ export default function RegistrationForm({ currentUser, isViewOnly, onNavigate }
           <button type="button" className="btn btn-outline" onClick={handlePrint} disabled={isSubmitting}>
             <i className="fas fa-print" style={{ marginRight: 6 }} /> Print Application
           </button>
-          {!isViewOnly && (
+          {canEdit && (
             <button type="submit" className="btn btn-gold" style={{ padding: '10px 24px', fontSize: '14px' }} disabled={isSubmitting}>
               <i className="fas fa-save" style={{ marginRight: 8 }} /> Save Registration
             </button>
           )}
         </div>
       </form>
+
+      {/* Official Form Print View */}
+      <div className="print-official-form">
+        <div className="of-head">
+          <div className="rc-logo"><img src="/assets/cma-logo.png" alt="CMA Logo" /></div>
+          <div className="of-title">CONDOMINIUM MANAGEMENT AUTHORITY</div>
+          <div className="of-subtitle">APPLICATION FOR REGISTRATION AS A MANAGEMENT CORPORATION</div>
+        </div>
+        
+        <div className="of-row" style={{ marginTop: 10 }}>
+          <div className="of-label">1. Title name of the Management Corporation :-</div>
+          <div className="of-value">{formData.name}</div>
+        </div>
+        <div className="of-row">
+          <div className="of-label">2. Registered Condominium Plan No :-</div>
+          <div className="of-value">{formData.plan_no}</div>
+        </div>
+        <div className="of-row">
+          <div className="of-label">3. Official Address of the M/C :-</div>
+          <div className="of-value">{formData.address}</div>
+        </div>
+        
+        <div className="of-section-title">4. Number of the parcels in the Condominium Complex,</div>
+        <div className="of-sub-row">
+          <div className="of-label">Residential :-</div>
+          <div className="of-value">{formData.residential_units}</div>
+        </div>
+        <div className="of-section-title" style={{ marginTop: 2, paddingLeft: 20 }}>Non Residential :-</div>
+        <div className="of-sub-row" style={{ paddingLeft: 40 }}>
+          <div className="of-label">Shops :-</div>
+          <div className="of-value">{formData.non_res_shops}</div>
+        </div>
+        <div className="of-sub-row" style={{ paddingLeft: 40 }}>
+          <div className="of-label">Office :-</div>
+          <div className="of-value">{formData.non_res_office}</div>
+        </div>
+        <div className="of-sub-row" style={{ paddingLeft: 40 }}>
+          <div className="of-label">Hotel :-</div>
+          <div className="of-value">{formData.non_res_hotel}</div>
+        </div>
+
+        <div className="of-section-title">5. Services available</div>
+        <div className="of-grid-2">
+          <div className="of-checkbox"><div className="of-box">{formData.services_lift ? '✓' : ''}</div> Lift</div>
+          <div className="of-checkbox"><div className="of-box">{formData.services_fire_agreement ? '✓' : ''}</div> Fire Service agreement</div>
+          <div className="of-checkbox"><div className="of-box">{formData.services_generator_agreement ? '✓' : ''}</div> Generator Service agreement</div>
+          <div className="of-checkbox"><div className="of-box">{formData.services_insurance ? '✓' : ''}</div> Insurance Details</div>
+        </div>
+
+        <div className="of-section-title">6. Facilities available</div>
+        <div className="of-grid-2">
+          <div className="of-checkbox"><div className="of-box">{formData.fac_common_parking ? '✓' : ''}</div> Common Parking</div>
+          <div className="of-checkbox"><div className="of-box">{formData.fac_super_market ? '✓' : ''}</div> Super Market</div>
+          
+          <div className="of-checkbox"><div className="of-box">{formData.fac_accessory_car_parcel ? '✓' : ''}</div> Accessory Car Parcel</div>
+          <div className="of-checkbox"><div className="of-box">{formData.fac_garden ? '✓' : ''}</div> Garden</div>
+          
+          <div className="of-checkbox"><div className="of-box">{formData.fac_roof_top ? '✓' : ''}</div> Roof Top</div>
+          <div className="of-checkbox"><div className="of-box">{formData.fac_sauna ? '✓' : ''}</div> Sauna</div>
+          
+          <div className="of-checkbox"><div className="of-box">{formData.fac_gym ? '✓' : ''}</div> Gym</div>
+          <div className="of-checkbox"><div className="of-box">{formData.fac_salon ? '✓' : ''}</div> Salon</div>
+          
+          <div className="of-checkbox"><div className="of-box">{formData.fac_swimming_pool ? '✓' : ''}</div> Swimming Pool</div>
+          <div className="of-checkbox"><div className="of-box">{formData.fac_golf_tennis ? '✓' : ''}</div> Golf &amp; Tennis Ground</div>
+          
+          <div className="of-checkbox"><div className="of-box">{formData.fac_penth_house ? '✓' : ''}</div> Penth House</div>
+          <div className="of-checkbox"><div className="of-box">{formData.fac_day_care ? '✓' : ''}</div> Day Care Centers</div>
+          
+          <div className="of-checkbox"><div className="of-box">{formData.fac_restaurant ? '✓' : ''}</div> Restaurant</div>
+        </div>
+
+        <div className="of-row" style={{ marginTop: 8 }}>
+          <div className="of-label">Management Services Company :-</div>
+          <div className="of-checkbox" style={{ marginRight: 15 }}>Yes <div className="of-box">{formData.mgmt_company_controlled === true ? '✓' : ''}</div></div>
+          <div className="of-checkbox">No <div className="of-box">{formData.mgmt_company_controlled === false ? '✓' : ''}</div></div>
+        </div>
+
+        <div className="of-section-title" style={{ textTransform: 'uppercase' }}>NAMES OF THE OFFICE BEARERS AND THEIR CONTACT NOS.</div>
+        <div className="of-row">
+          <div className="of-label">Secretary -</div>
+          <div className="of-value">{formData.secretary}</div>
+        </div>
+        <div className="of-sub-row">
+          <div className="of-label">Unit No -</div>
+          <div className="of-value">{formData.secretary_unit_no}</div>
+        </div>
+        <div className="of-sub-row">
+          <div className="of-label">Contact No -</div>
+          <div className="of-value">{formData.secretary_contact}</div>
+        </div>
+        <div className="of-sub-row">
+          <div className="of-label">E-mail Address -</div>
+          <div className="of-value">{formData.secretary_email}</div>
+        </div>
+
+        <div className="of-row" style={{ marginTop: 4 }}>
+          <div className="of-label">Treasurer -</div>
+          <div className="of-value">{formData.treasurer}</div>
+        </div>
+        <div className="of-sub-row">
+          <div className="of-label">Unit No -</div>
+          <div className="of-value">{formData.treasurer_unit_no}</div>
+        </div>
+        <div className="of-sub-row">
+          <div className="of-label">Contact No -</div>
+          <div className="of-value">{formData.treasurer_contact}</div>
+        </div>
+        <div className="of-sub-row">
+          <div className="of-label">E-mail Address -</div>
+          <div className="of-value">{formData.treasurer_email}</div>
+        </div>
+
+        <div className="of-section-title">Council Members -</div>
+        <table className="of-table">
+          <thead>
+            <tr>
+              <th style={{ width: 40 }}>#</th>
+              <th>Name</th>
+              <th style={{ width: 120 }}>Unit No</th>
+              <th style={{ width: 150 }}>Contact No</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(formData.council_members || Array.from({ length: 5 }, () => ({}))).map((member, idx) => (
+              <tr key={idx}>
+                <td style={{ textAlign: 'center', fontWeight: 'bold' }}>{['I.', 'II.', 'III.', 'IV.', 'V.'][idx] || idx + 1}</td>
+                <td>{member.name || ''}</td>
+                <td>{member.unit_no || ''}</td>
+                <td>{member.contact_no || ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div className="of-row" style={{ marginTop: 10 }}>
+          <div className="of-label" style={{ whiteSpace: 'normal', fontWeight: 'normal', display: 'flex', alignItems: 'center' }}>
+            <span>7. Written assurance from secretary that Condominium Management Authority requirement will be fulfilled (attached)</span> 
+            <div className="of-box" style={{ marginLeft: 10 }}>{formData.written_assurance_fulfilled ? '✓' : ''}</div>
+          </div>
+        </div>
+
+        <div className="of-signatures">
+          <div>Authorized Signature</div>
+          <div>Secretary<br />Management Corporation</div>
+        </div>
+      </div>
 
       {/* Printable Registration Receipt (visible only when printing via "Print Registration Receipt") */}
       <div className="print-receipt">

@@ -255,16 +255,65 @@ export const tdStatusStyle = {
   backgroundClip: 'padding-box',
 };
 
-export function StatusPill({ status, renewalStatus }) {
-  const s = String(status || '').toLowerCase().trim();
-  const isYearLike = /^(19|20)\d{2}([/-](19|20)\d{2})?$/.test(s);
-  const isActive = (s.includes('active') && !s.includes('non')) || isYearLike;
-  const isNonActive = s.includes('non');
+export function getDetailedRenewalStatusText(mc, status, settings) {
+  const currentYear = new Date().getFullYear();
+  let txt = deriveStatus(status);
+  let isOk = true;
+
+  if (mc) {
+    const multiRows = buildMultiYearRenewalRows(mc, settings);
+    if (!multiRows || multiRows.length === 0) {
+      const regYearStr = mc.reg_date ? mc.reg_date.split('-')[0] : (mc.year ? String(mc.year) : String(currentYear));
+      const regYear = parseInt(regYearStr, 10);
+      if (regYear === currentYear && String(status).toLowerCase() === 'active' && (!mc.renewal_paid_years && !mc.renewal_paid_year)) {
+        txt = `Active (New in ${regYear})`;
+      } else {
+        txt = `Active up to ${currentYear}`;
+      }
+    } else {
+      const unpaidYears = multiRows.map(r => r.year);
+      txt = `Non Active (Unpaid: ${unpaidYears.join(', ')})`;
+      isOk = false;
+    }
+  }
+  return { text: txt, isOk };
+}
+
+export function StatusPill({ status, renewalStatus, record }) {
+  // Compute effective status from record fields (renewal_period vs current year)
+  // This mirrors the logic that was previously inline in the table row renderer
+  let effectiveStatusStr = status;
+  if (record) {
+    const currentYear = new Date().getFullYear();
+    const renewalPeriodYear = parseInt(record.renewal_period, 10);
+    const renewalVise = String(record.renewal_date_vise || '').toLowerCase().trim();
+    const paymentStatus = record.renewal_payment_status;
+
+    if (paymentStatus === 'Pending Approval') {
+      effectiveStatusStr = 'Pending';
+    } else if (renewalVise === 'non active' || renewalVise === 'nonactive') {
+      effectiveStatusStr = 'Non Active';
+    } else if (paymentStatus === 'Approved') {
+      effectiveStatusStr = 'Active';
+    } else if (renewalPeriodYear && renewalPeriodYear >= currentYear) {
+      effectiveStatusStr = 'Active';
+    } else if (renewalPeriodYear && renewalPeriodYear < currentYear) {
+      effectiveStatusStr = 'Non Active';
+    }
+    // else: no renewal_period → keep raw status from DB
+  }
+
+  const derivedStatus = deriveStatus(effectiveStatusStr);
+  const s = derivedStatus.toLowerCase();
+
+  const isActive = s === 'active';
+  const isNonActive = s === 'non active';
   const isPendingAgm = s === 'pending';
-  const bg = isActive ? '#f0fdf4' : isNonActive ? '#fef2f2' : '#eff6ff';
-  const color = isActive ? theme.green : isNonActive ? theme.red : theme.blue;
-  const border = isActive ? '#bbf7d0' : isNonActive ? '#fecaca' : '#bfdbfe';
-  const dotBg = isActive ? '#16a34a' : isNonActive ? '#dc2626' : '#2563eb';
+  const isNew = s === 'new';
+  const bg = isActive ? '#f0fdf4' : isNonActive ? '#fef2f2' : isNew ? '#f0f9ff' : '#eff6ff';
+  const color = isActive ? theme.green : isNonActive ? theme.red : isNew ? '#0369a1' : theme.blue;
+  const border = isActive ? '#bbf7d0' : isNonActive ? '#fecaca' : isNew ? '#bae6fd' : '#bfdbfe';
+  const dotBg = isActive ? '#16a34a' : isNonActive ? '#dc2626' : isNew ? '#0284c7' : '#2563eb';
 
   const isApproved = renewalStatus === 'Approved';
 
@@ -288,7 +337,7 @@ export function StatusPill({ status, renewalStatus }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 8px', borderRadius: 999, background: bg, border: `1px solid ${border}`, color, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap' }}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotBg }} />
-          {status || '-'}
+          {derivedStatus}
         </span>
         {isApproved && (
           <span style={{ display: 'inline-flex', alignItems: 'center', color: '#16a34a', fontSize: 14 }} title="Renewal Approved">
@@ -301,9 +350,16 @@ export function StatusPill({ status, renewalStatus }) {
   );
 }
 
+
 export function ActionBtn({ icon, color, title, onClick }) {
+  const handleClick = (e) => {
+    if (e && typeof e.stopPropagation === 'function') {
+      e.stopPropagation();
+    }
+    if (onClick) onClick(e);
+  };
   return (
-    <button onClick={onClick} title={title} style={{ background: 'none', border: 'none', cursor: 'pointer', color, width: 18, minWidth: 18, height: 20, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, padding: 0, flexShrink: 0 }}>
+    <button onClick={handleClick} title={title} style={{ background: 'none', border: 'none', cursor: 'pointer', color, width: 18, minWidth: 18, height: 20, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, padding: 0, flexShrink: 0 }}>
       <i className={icon} />
     </button>
   );
@@ -334,11 +390,11 @@ export function FormSelect({ label, value, onChange, options }) {
 }
 
 export function CheckboxField({ label, checked, onChange }) {
-  const inputId = 'mc_form_' + String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  const inputId = 'mc_chk_' + String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '_');
   return (
-    <label htmlFor={inputId} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: theme.text2, cursor: 'pointer' }}>
-      <input id={inputId} name={inputId} type="checkbox" checked={!!checked} onChange={(e) => onChange(e.target.checked)} />
-      <span>{label}</span>
+    <label htmlFor={inputId} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: theme.text2, cursor: 'pointer' }}>
+      <input id={inputId} name={inputId} type="checkbox" checked={checked || false} onChange={(e) => onChange(e.target.checked)} />
+      {label}
     </label>
   );
 }
@@ -382,7 +438,7 @@ export function ViewField({ label, value }) {
   return (
     <div style={{ display: 'flex', borderBottom: `1px solid ${theme.border}`, padding: '9px 4px', fontSize: 13, alignItems: 'flex-start' }}>
       <div style={{ width: '240px', color: theme.text2, fontWeight: 600, flexShrink: 0 }}>{label}</div>
-      <div style={{ color: theme.text, wordBreak: 'break-word', flex: 1 }}>{value == null || String(value).trim() === '' ? '-' : String(value)}</div>
+      <div style={{ color: theme.text, wordBreak: 'break-word', flex: 1 }}>{value === null || value === undefined || value === '' ? '-' : value}</div>
     </div>
   );
 }
@@ -482,12 +538,12 @@ export function deriveYear(v) {
 export function deriveStatus(v) {
   const s = toText(v).toLowerCase();
   if (!s) return 'Active';
-  if (s.includes('non') && s.includes('active')) return 'Non Active';
-  if (s.includes('non')) return 'Non Active';
+  if (s.includes('non') || s.includes('inactive')) return 'Non Active';
   if (s.includes('pending')) return 'Pending';
   if (s.includes('active')) return 'Active';
-  if (/^(19|20)\d{2}([/-](19|20)\d{2})?$/.test(s)) return 'Active';
-  return String(v).trim();
+
+  // Default any unrecognized value (like dates, numbers, '-') to 'Active'
+  return 'Active';
 }
 
 export function coerceDateText(v) {
@@ -522,6 +578,19 @@ export function formatDotDate(v) {
   if (m) return `${m[3]}.${m[2]}.${m[1]}`;
   return d;
 }
+
+export function formatOrdinalDate(v) {
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return v || '-';
+  const day = d.getDate();
+  const suffix = (day === 1 || day === 21 || day === 31) ? 'st' :
+                 (day === 2 || day === 22) ? 'nd' :
+                 (day === 3 || day === 23) ? 'rd' : 'th';
+  const month = d.toLocaleString('en-US', { month: 'long' });
+  const year = d.getFullYear();
+  return `${day}${suffix} ${month} ${year}`;
+}
+
 
 export function escapeHtml(v) {
   return String(v ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -618,7 +687,7 @@ export function getRenewalAmountInfo(mc, settings) {
     else if (cat.includes('semi')) categoryKey = 'private_semi_luxury';
     else if (cat.includes('middle')) categoryKey = 'government_middle';
     else if (cat.includes('low')) categoryKey = 'government_low';
-    
+
     rate = CATEGORY_RATES[categoryKey]?.rate ?? 250;
   } else {
     rate = getRenewalRate(mc?.category) || 250;
@@ -642,7 +711,7 @@ export function getRenewalAmountInfo(mc, settings) {
 //   From 2023 onwards: PER-UNIT rate (units - rate_per_unit)
 //
 // Used to build the "Non Active" multi-year covering letter.
-export function buildMultiYearRenewalRows(mc, settings) {
+export function buildMultiYearRenewalRows(mc, settings, overrideEndYear = null) {
   const CATEGORY_RATES = settings?.mc_category_rates;
   let ratePerUnit = 250;
   if (CATEGORY_RATES) {
@@ -652,7 +721,7 @@ export function buildMultiYearRenewalRows(mc, settings) {
     else if (cat.includes('semi')) categoryKey = 'private_semi_luxury';
     else if (cat.includes('middle')) categoryKey = 'government_middle';
     else if (cat.includes('low')) categoryKey = 'government_low';
-    
+
     ratePerUnit = CATEGORY_RATES[categoryKey]?.rate ?? 250;
   } else {
     ratePerUnit = getRenewalRate(mc?.category) || 250;
@@ -677,32 +746,62 @@ export function buildMultiYearRenewalRows(mc, settings) {
     || ratePerUnit === 100
     || ratePerUnit === 200;
 
+  const isNhda = String(mc?.category || '').toLowerCase().includes('nhda') ||
+    String(mc?.file_no || '').toUpperCase().includes('NHDA') ||
+    String(mc?.new_file_no || '').toUpperCase().includes('NHDA') ||
+    String(mc?.old_file_no || '').toUpperCase().includes('NHDA');
+
   // Determine start year from renewal_period (= last year the MC PAID for)
   // Can be a number like 2022, or a string like "13.10.2011 13.10.2012"
-  let startYear = new Date().getFullYear();
+  let startYear = new Date().getFullYear() - 1; // Default to last year, so they owe for current year
+  let hasExplicitStartYear = false;
   const rawPeriod = mc?.renewal_period;
   if (rawPeriod) {
     const periodStr = String(rawPeriod).trim();
     const yearMatches = periodStr.match(/\b(19|20)\d{2}\b/g);
     if (yearMatches && yearMatches.length > 0) {
-      // Take the last year found (e.g. "13.10.2011 13.10.2012" - 2012 - start from 2013)
-      startYear = parseInt(yearMatches[yearMatches.length - 1]) + 1;
+      // Take the last year found
+      startYear = parseInt(yearMatches[yearMatches.length - 1], 10);
+      hasExplicitStartYear = true;
     } else if (/^\d{4}$/.test(periodStr)) {
-      startYear = parseInt(periodStr) + 1;
+      startYear = parseInt(periodStr, 10);
+      hasExplicitStartYear = true;
     }
-  } else if (mc?.reg_date) {
-    const d = new Date(mc.reg_date);
-    if (!Number.isNaN(d.getTime())) startYear = d.getFullYear();
+  } 
+  
+  if (!hasExplicitStartYear && mc?.reg_date) {
+    // Handle DD/MM/YYYY and YYYY-MM-DD
+    let d = new Date(mc.reg_date);
+    if (Number.isNaN(d.getTime())) {
+      const parts = String(mc.reg_date).split('/');
+      if (parts.length === 3) {
+        d = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+      }
+    }
+    if (!Number.isNaN(d.getTime())) {
+      startYear = d.getFullYear();
+      hasExplicitStartYear = true;
+    }
+  } 
+  
+  if (!hasExplicitStartYear && mc?.year) {
+    startYear = parseInt(mc.year, 10);
+    if (!Number.isNaN(startYear)) {
+       hasExplicitStartYear = true;
+    }
   }
 
-  // If system has a recorded paid year from manual payment entry, respect it
-  const paidYear = mc?.renewal_paid_year ? parseInt(mc.renewal_paid_year) : null;
-  if (paidYear && paidYear >= startYear) startYear = paidYear + 1;
+  // If still no explicit start year, but MC is currently 'Active', they are paid up to the current year
+  if (!hasExplicitStartYear && String(mc?.status || '').toLowerCase() === 'active') {
+      startYear = new Date().getFullYear();
+      hasExplicitStartYear = true;
+  }
 
   const currentYear = new Date().getFullYear();
-  const endYear = currentYear;
+  const endYear = overrideEndYear || currentYear;
 
-  if (startYear > endYear) return [];
+  const paidYearsStr = mc?.renewal_paid_years || String(mc?.renewal_paid_year || '');
+  const paidYears = paidYearsStr ? paidYearsStr.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y)) : [];
 
   // Rate change boundary: pre-2023 = flat annual fee; 2023+ = per-unit fee
   const RATE_CHANGE_YEAR = 2023;
@@ -721,7 +820,8 @@ export function buildMultiYearRenewalRows(mc, settings) {
   ];
 
   const rows = [];
-  for (let y = startYear; y <= endYear; y++) {
+  for (let y = startYear + 1; y <= endYear; y++) {
+    if (paidYears.includes(y)) continue;
     const isPerUnit = y >= RATE_CHANGE_YEAR;
 
     let fee = 0;
@@ -732,11 +832,11 @@ export function buildMultiYearRenewalRows(mc, settings) {
       fee = ratePerUnit * units;
       actualRateUsed = ratePerUnit;
     } else {
-      // Pre-2023: Government = flat Rs.500/yr; Private = bracket table
-      if (isGov) {
-        fee = 500;
+      // Pre-2023: Government/NHDA = flat Rs.500/yr; Private = bracket table
+      if (isGov || isNhda) {
+        fee = settings?.mc_gov_nhda_pre2023_rate ?? 500;
       } else {
-        const ratesPre2023 = settings?.mcom_rates_pre2023 || OLD_MC_RATES_PRE_2023;
+        const ratesPre2023 = settings?.mc_rates_pre2023 || OLD_MC_RATES_PRE_2023;
         const match = ratesPre2023.find(r => units >= r.minUnits && (r.maxUnits === null || units <= r.maxUnits));
         fee = match ? match.fee : 500;
       }
@@ -748,7 +848,8 @@ export function buildMultiYearRenewalRows(mc, settings) {
     const sscl = fee * ssclRate;
     const vat = (fee + sscl) * vatRate;
     const total = fee + sscl + vat;
-    rows.push({ year: y, units, rate: actualRateUsed, fee, sscl, vat, total, isPerUnit });
+    const showUnits = (y < RATE_CHANGE_YEAR && (isGov || isNhda)) ? '-' : units;
+    rows.push({ year: y, units: showUnits, rate: actualRateUsed, fee, sscl, vat, total, isPerUnit });
   }
   return rows;
 }
@@ -756,28 +857,42 @@ export function buildMultiYearRenewalRows(mc, settings) {
 
 // Renewal periods run to 31 December of the registration/renewal year (per CMA's actual
 // receipt period, e.g. "01.06.2026 - 31.12.2026"), not a rolling 365 days from reg_date.
-// If that date has already passed (record not yet renewed), roll forward year by year
-// until we reach the next upcoming 31 December cut-off.
+// Renewals are based on the calendar year (01/01 to 31/12).
+// The coverage for the given baseDate year expires on December 31st of that year.
 export function getRenewalDueDate(mc) {
-  const raw = mc?.renewal_date_vise || mc?.next_renewal_date || mc?.reg_date;
-  const base = coerceDateText(raw);
-  if (!base) return null;
-  const baseDate = new Date(base);
-  if (Number.isNaN(baseDate.getTime())) return null;
+  // renewal_date_vise is a text status field ('Active', 'Non Active') - NOT a date.
+  // Use the actual date fields in priority order:
+  // 1. renewal_period = last year the MC paid (e.g. "2025") → next due is Dec 31 of renewal_period + 1
+  // 2. next_renewal_date = explicit next renewal date
+  // 3. reg_date = registration date → due end of that calendar year
+  const renewalPeriod = String(mc?.renewal_period || '').trim();
+  const nextRenewalDateRaw = mc?.next_renewal_date;
+  const regDateRaw = mc?.reg_date;
 
-  let dueYear = baseDate.getFullYear();
-  let due = new Date(dueYear, 11, 31); // 31 December of that year
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  due.setHours(0, 0, 0, 0);
+  let dueYear = null;
 
-  // If this cut-off already passed and the record hasn't been renewed since, advance
-  // year by year to the next upcoming 31 December.
-  while (due < today) {
-    dueYear += 1;
-    due = new Date(dueYear, 11, 31);
-    due.setHours(0, 0, 0, 0);
+  if (renewalPeriod && /^\d{4}$/.test(renewalPeriod)) {
+    // MC paid up to this year → next renewal is next year Dec 31
+    dueYear = parseInt(renewalPeriod, 10) + 1;
+  } else if (nextRenewalDateRaw) {
+    const base = coerceDateText(nextRenewalDateRaw);
+    if (base) {
+      const d = new Date(base);
+      if (!Number.isNaN(d.getTime())) dueYear = d.getFullYear();
+    }
+  } else if (regDateRaw) {
+    const base = coerceDateText(regDateRaw);
+    if (base) {
+      const d = new Date(base);
+      if (!Number.isNaN(d.getTime())) dueYear = d.getFullYear();
+    }
   }
+
+  if (!dueYear) return null;
+
+  // Renewal period always ends Dec 31 of the due year
+  const due = new Date(dueYear, 11, 31);
+  due.setHours(0, 0, 0, 0);
   return due;
 }
 
@@ -1385,13 +1500,13 @@ export const MCOM_OLD_BRACKET_PRE2023 = [
   { maxUnits: 10, minUnits: 1, fee: 1000 },
 ];
 
-export function getMcomFeeForYear(units, year, isGov, settings) {
+export function getMcomFeeForYear(units, year, isGov, settings, isNhda = false) {
   const u = parseInt(units) || 0;
   const rates2023 = settings?.mcom_rates_2023 || MCOM_RENEWAL_RATES_2023;
   const ratesPre2023 = settings?.mcom_rates_pre2023 || MCOM_OLD_BRACKET_PRE2023;
 
   if (year < 2023) {
-    if (isGov) return 250;
+    if (isGov || isNhda) return settings?.mcom_gov_nhda_pre2023_rate ?? 250;
     const match = ratesPre2023.find(r => u >= r.minUnits && (r.maxUnits === null || u <= r.maxUnits));
     return match ? match.fee : 250;
   }
@@ -1403,7 +1518,8 @@ export function getMcomAnnualFeeInfo(mc, settings) {
   const units = parseInt(mc?.units) || 0;
   const currentYear = new Date().getFullYear();
   const isGov = String(mc?.mc_mcom || '').toUpperCase().includes('GOV') || String(mc?.category || '').toLowerCase().includes('government');
-  const feePerYear = getMcomFeeForYear(units, currentYear, isGov, settings);
+  const isNhda = String(mc?.mc_mcom || '').toUpperCase().includes('NHDA') || String(mc?.category || '').toLowerCase().includes('nhda') || String(mc?.file_no || '').toUpperCase().includes('NHDA') || String(mc?.new_file_no || '').toUpperCase().includes('NHDA') || String(mc?.old_file_no || '').toUpperCase().includes('NHDA');
+  const feePerYear = getMcomFeeForYear(units, currentYear, isGov, settings, isNhda);
   return { units, feePerYear };
 }
 
@@ -1416,6 +1532,7 @@ export function buildMcomMultiYearRows(mc, settings) {
   const units = parseInt(mc?.units) || 0;
   const currentYear = new Date().getFullYear();
   const isGov = String(mc?.mc_mcom || '').toUpperCase().includes('GOV') || String(mc?.category || '').toLowerCase().includes('government');
+  const isNhda = String(mc?.mc_mcom || '').toUpperCase().includes('NHDA') || String(mc?.category || '').toLowerCase().includes('nhda') || String(mc?.file_no || '').toUpperCase().includes('NHDA') || String(mc?.new_file_no || '').toUpperCase().includes('NHDA') || String(mc?.old_file_no || '').toUpperCase().includes('NHDA');
 
   let startYear = currentYear;
   const rawPeriod = mc?.renewal_period;
@@ -1443,11 +1560,12 @@ export function buildMcomMultiYearRows(mc, settings) {
   const vatRate = settings?.vat_rate ?? 0.18;
   const rows = [];
   for (let year = startYear; year <= endYear; year++) {
-    const fee = getMcomFeeForYear(units, year, isGov, settings);
+    const fee = getMcomFeeForYear(units, year, isGov, settings, isNhda);
     const sscl = parseFloat((fee * ssclRate).toFixed(2));
     const vat = parseFloat(((fee + sscl) * vatRate).toFixed(2));
     const total = parseFloat((fee + sscl + vat).toFixed(2));
-    rows.push({ year, units, fee, sscl, vat, total, isGov });
+    const showUnits = (year < 2023 && (isGov || isNhda)) ? '-' : units;
+    rows.push({ year, units: showUnits, fee, sscl, vat, total, isGov });
   }
   return rows;
 }

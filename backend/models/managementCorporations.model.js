@@ -116,6 +116,10 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.TEXT,
         allowNull: true,
       },
+      agm_meeting_type: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
       mc: {
         type: DataTypes.TEXT,
         allowNull: true,
@@ -257,6 +261,7 @@ module.exports = (sequelize, DataTypes) => {
       renewal_paid_date: { type: DataTypes.TEXT, allowNull: true },
       renewal_paid_amount: { type: DataTypes.REAL, allowNull: true },
       renewal_paid_year: { type: DataTypes.INTEGER, allowNull: true },
+      renewal_paid_years: { type: DataTypes.TEXT, allowNull: true },
       renewal_receipt_no: { type: DataTypes.TEXT, allowNull: true },
       acknowledgement_no: { type: DataTypes.TEXT, allowNull: true },
       acknowledgement_date: { type: DataTypes.TEXT, allowNull: true },

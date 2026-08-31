@@ -88,20 +88,9 @@ module.exports = (models) => {
              newStatus = 'In Progress';
              actionNote = 'Auto changed to In Progress: date arrived';
              
-             // Create notification
-             try {
-                if (Notification) {
-                    await Notification.create({
-                        type: 'info',
-                        title: 'Discussion Reminder',
-                        message: `Discussion ${disc.file_no} has an active reminder scheduled for today.`,
-                        target_role: null,
-                        link: '/discussions'
-                    });
-                }
-             } catch (e) {
-                 console.error("Failed to create notification:", e);
-             }
+             // Topbar handles discussion reminders by polling the /pending endpoint directly.
+             // No need to create a global popup notification here.
+
           }
         } else if (targetMs < todayMs) {
           // Past date -> keep/set as Cancelled

@@ -1,4 +1,4 @@
-﻿import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import '../CMAStyles.css';
 import { useAutoRefresh } from '../utils/useAutoRefresh';
 const THEME = {
@@ -8,7 +8,7 @@ const THEME = {
   text2: '#5a6478',
   text3: '#94a0b4',
   blue: '#2563eb',
-  orange: '#ea580c',
+  orange: '#f59e0b',
   teal: '#0d9488',
   bg: '#f5f7fa',
 };
@@ -263,6 +263,8 @@ export default function ActivityLogs({ onClose }) {
   const [isLoading, setIsLoading] = useState(true);
   const [dateFilter, setDateFilter] = useState('');
   const [userFilter, setUserFilter] = useState('All Users');
+  const [actionFilter, setActionFilter] = useState('All');
+  const [searchTerm, setSearchTerm] = useState('');
   const [refreshTick, setRefreshTick] = useState(0);
 
   const [allUsers, setAllUsers] = useState([]);
@@ -331,6 +333,19 @@ export default function ActivityLogs({ onClose }) {
     if (userFilter !== 'All Users') {
       logs = logs.filter((log) => log.user === userFilter);
     }
+    if (actionFilter !== 'All') {
+      logs = logs.filter(log => {
+        const actionText = log.action.toLowerCase();
+        if (actionFilter === 'Added') return actionText.includes('add') || actionText.includes('create') || actionText.includes('insert') || actionText.includes('upload');
+        if (actionFilter === 'Update') return actionText.includes('update') || actionText.includes('edit') || actionText.includes('modify');
+        if (actionFilter === 'Delete') return actionText.includes('delete') || actionText.includes('remove');
+        return true;
+      });
+    }
+    if (searchTerm) {
+      const lower = searchTerm.toLowerCase();
+      logs = logs.filter(log => log.action.toLowerCase().includes(lower) || log.user.toLowerCase().includes(lower));
+    }
     if (dateFilter) {
       if (dateFilter.length === 10) {
         const [y, m, d] = dateFilter.split('-');
@@ -343,7 +358,7 @@ export default function ActivityLogs({ onClose }) {
       }
     }
     return logs.sort((a, b) => new Date(b.date) - new Date(a.date));
-  }, [dateFilter, userFilter, logsData]);
+  }, [dateFilter, userFilter, actionFilter, searchTerm, logsData]);
 
   const monthlyStats = useMemo(() => {
     const stats = {};
@@ -359,6 +374,96 @@ export default function ActivityLogs({ onClose }) {
   }, [userFilter, logsData]);
 
   const maxCount = Math.max(...monthlyStats.map((s) => s.count), 1);
+
+  const downloadReport = () => {
+    const printWindow = window.open('', '_blank', 'width=900,height=1000');
+    if (!printWindow) return alert('Please allow popups to download the report.');
+    
+    // Group logs by user
+    const grouped = {};
+    filteredLogs.forEach(log => {
+      const u = extractUserAndRole(log.user);
+      const name = u.name;
+      if (!grouped[name]) grouped[name] = [];
+      grouped[name].push({ ...log, role: u.role });
+    });
+
+    const d = new Date();
+    
+    let html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Activity Report</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 40px; color: #1a1a2e; }
+          .header { border-bottom: 2px solid #1a3a6b; padding-bottom: 20px; margin-bottom: 30px; }
+          .title { font-size: 24px; font-weight: bold; color: #1a3a6b; margin: 0 0 10px 0; }
+          .meta { font-size: 13px; color: #5a6478; line-height: 1.5; }
+          .user-section { margin-bottom: 40px; page-break-inside: avoid; }
+          .user-header { font-size: 18px; font-weight: bold; color: #1a3a6b; margin-bottom: 15px; padding-bottom: 8px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: flex-end; }
+          table { width: 100%; border-collapse: collapse; font-size: 13px; }
+          th, td { padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: left; }
+          th { background: #f8fafc; color: #5a6478; font-weight: 600; text-transform: uppercase; font-size: 11px; }
+          .date { color: #5a6478; white-space: nowrap; width: 150px; }
+          @media print { body { padding: 20px; } }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="title">System Activity Report</div>
+          <div class="meta">
+            <strong>Generated on:</strong> ${d.toLocaleString()}<br/>
+            <strong>Total Records:</strong> ${filteredLogs.length}
+            ${dateFilter ? `<br/><strong>Date Filter:</strong> ${dateFilter}` : ''}
+            ${userFilter !== 'All Users' ? `<br/><strong>User Filter:</strong> ${userFilter}` : ''}
+            ${actionFilter !== 'All' ? `<br/><strong>Action Filter:</strong> ${actionFilter}` : ''}
+          </div>
+        </div>
+    `;
+
+    Object.keys(grouped).sort().forEach(userName => {
+      const userLogs = grouped[userName];
+      const role = userLogs[0].role;
+      html += `
+        <div class="user-section">
+          <div class="user-header">
+            <span>${userName}</span>
+            <span style="font-size: 13px; color: #5a6478; font-weight: normal;">${role} - ${userLogs.length} Activities</span>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th class="date">Date & Time</th>
+                <th>Activity Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${userLogs.map(log => `
+                <tr>
+                  <td class="date">${new Date(log.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
+                  <td>${log.action}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    });
+
+    if (filteredLogs.length === 0) {
+      html += `<div>No activities found for the selected criteria.</div>`;
+    }
+
+    html += `</body></html>`;
+    
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+    }, 500);
+  };
 
   const isModal = !!onClose;
 
@@ -525,7 +630,7 @@ export default function ActivityLogs({ onClose }) {
             className="form-control"
             value={userFilter}
             onChange={(e) => setUserFilter(e.target.value)}
-            style={{ minWidth: '200px', fontSize: '13px' }}
+            style={{ minWidth: '180px', fontSize: '13px' }}
           >
             {uniqueUsers.map((u) => (
               <option key={u} value={u}>
@@ -534,19 +639,93 @@ export default function ActivityLogs({ onClose }) {
             ))}
           </select>
         </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'flex-end' }}>
+        <div>
+          <label
+            style={{
+              display: 'block',
+              fontSize: '11px',
+              fontWeight: '600',
+              color: THEME.text3,
+              marginBottom: '5px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            }}
+          >
+            Action
+          </label>
+          <select
+            className="form-control"
+            value={actionFilter}
+            onChange={(e) => setActionFilter(e.target.value)}
+            style={{ minWidth: '120px', fontSize: '13px' }}
+          >
+            <option value="All">All Actions</option>
+            <option value="Added">Added</option>
+            <option value="Update">Updated</option>
+            <option value="Delete">Deleted</option>
+          </select>
+        </div>
+        <div>
+          <label
+            style={{
+              display: 'block',
+              fontSize: '11px',
+              fontWeight: '600',
+              color: THEME.text3,
+              marginBottom: '5px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            }}
+          >
+            Search
+          </label>
+          <input
+            type="text"
+            className="form-control"
+            placeholder="Search activities..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{ minWidth: '160px', fontSize: '13px' }}
+          />
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'flex-end', gap: '12px' }}>
           <span
             style={{
               fontSize: '12px',
               color: THEME.navy,
               background: `${THEME.navy}12`,
-              padding: '5px 12px',
+              padding: '8px 12px',
               borderRadius: '20px',
               fontWeight: '600',
+              display: 'flex',
+              alignItems: 'center',
+              height: '35px'
             }}
           >
             {filteredLogs.length} Records
           </span>
+          <button
+            onClick={downloadReport}
+            style={{
+              background: THEME.navy,
+              color: '#fff',
+              border: 'none',
+              padding: '0 16px',
+              borderRadius: '6px',
+              fontSize: '13px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              height: '35px',
+              boxShadow: '0 2px 5px rgba(26,58,107,0.2)'
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.background = '#102a52'}
+            onMouseLeave={(e) => e.currentTarget.style.background = THEME.navy}
+          >
+            <i className="fas fa-file-pdf" /> Download Report
+          </button>
         </div>
       </div>
 

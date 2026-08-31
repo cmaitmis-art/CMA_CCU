@@ -6,23 +6,42 @@ import { fixMojibakeDeep } from './utils/sinhalaUtils.js';
 // This ensures that backend audit logs (created_by, modified_by, history)
 // correctly record the user performing the action, rather than defaulting to 'System'.
 const originalFetch = window.fetch;
-window.fetch = async function(url, options) {
+window.fetch = async function (url, options) {
   let finalUrl = url;
   if (options) {
     const userStr = sessionStorage.getItem('cma_currentUser');
     if (userStr) {
       const user = JSON.parse(userStr);
-      const username = user?.name || user?.username || 'System';
+      let username = user?.name || user?.username || 'System';
+      if (user?.department) {
+        username = `${username} (${user.department})`;
+      }
 
       if (options.method === 'POST' || options.method === 'PUT' || options.method === 'PATCH') {
         try {
-          if (typeof options.body === 'string' && options.body.trim().startsWith('{')) {
-            const bodyObj = JSON.parse(options.body);
-            if (!bodyObj.user_name) bodyObj.user_name = username;
-            if (!bodyObj.created_by) bodyObj.created_by = username;
-            if (!bodyObj.modified_by) bodyObj.modified_by = username;
-            const cleanedBody = fixMojibakeDeep(bodyObj);
-            options.body = JSON.stringify(cleanedBody);
+          if (typeof options.body === 'string') {
+            const trimmed = options.body.trim();
+            if (trimmed.startsWith('{')) {
+              const bodyObj = JSON.parse(options.body);
+              if (!bodyObj.user_name) bodyObj.user_name = username;
+              if (!bodyObj.created_by) bodyObj.created_by = username;
+              if (!bodyObj.modified_by) bodyObj.modified_by = username;
+              const cleanedBody = fixMojibakeDeep(bodyObj);
+              options.body = JSON.stringify(cleanedBody);
+            } else if (trimmed.startsWith('[')) {
+              const bodyArr = JSON.parse(options.body);
+              if (Array.isArray(bodyArr)) {
+                for (const item of bodyArr) {
+                  if (item && typeof item === 'object') {
+                    if (!item.user_name) item.user_name = username;
+                    if (!item.created_by) item.created_by = username;
+                    if (!item.modified_by) item.modified_by = username;
+                  }
+                }
+                const cleanedBody = fixMojibakeDeep(bodyArr);
+                options.body = JSON.stringify(cleanedBody);
+              }
+            }
           }
         } catch (e) {
           console.warn('Fetch interceptor could not parse body:', e);
@@ -35,7 +54,28 @@ window.fetch = async function(url, options) {
       }
     }
   }
-  return originalFetch.call(this, finalUrl, options);
+  // Add retry logic for 502 Bad Gateway (Server restarting) or network errors
+  const maxRetries = 3;
+  const retryDelayMs = 1500;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await originalFetch.call(this, finalUrl, options);
+      if (response.status === 502 && attempt < maxRetries) {
+        // Backend is likely restarting (nodemon). Wait and retry.
+        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+        continue;
+      }
+      return response;
+    } catch (err) {
+      // Network errors (e.g. proxy completely down)
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+        continue;
+      }
+      throw err;
+    }
+  }
 };
 // -------------------------------------------------
 
@@ -43,8 +83,10 @@ export function getApiBase() {
   // Use the environment variable if defined (for production), otherwise fallback to '/api' for local dev
   const envUrl = import.meta.env.VITE_API_URL;
   if (envUrl) {
-    // Ensure the URL does not have a trailing slash, and append /api since all backend routes use it
-    return envUrl.replace(/\/$/, '') + '/api';
+    // Ensure the URL does not have a trailing slash
+    const cleanUrl = envUrl.replace(/\/$/, '');
+    // Append /api only if it doesn't already end with it
+    return cleanUrl.endsWith('/api') ? cleanUrl : cleanUrl + '/api';
   }
   return '/api';
 }
@@ -66,6 +108,9 @@ async function handleResponse(response) {
     throw new Error(body.error || 'API request failed');
   }
   const data = await response.json();
+  if (data && data.success === false && data.error) {
+    throw new Error(data.error);
+  }
   return fixMojibakeDeep(data);
 }
 
@@ -246,9 +291,19 @@ export async function fetchMCsFiltered(filters = {}) {
   return fetchMCs(filters);
 }
 
+export async function fetchMCById(id) {
+  const response = await fetch(`${API_BASE}/mc/${id}`);
+  return handleResponse(response);
+}
+
 export async function fetchMCsAll() {
   const url = buildUrl(`${API_BASE}/mc`, { limit: 999999 });
   const response = await fetch(url);
+  return handleResponse(response);
+}
+
+export async function fetchMComById(id) {
+  const response = await fetch(`${API_BASE}/mcom/${id}`);
   return handleResponse(response);
 }
 
@@ -311,8 +366,8 @@ export async function deleteMComsBulk(fileNos = []) {
 }
 
 // ========== M.COM API ==========
-export async function fetchMComs({ year, month, municipality, mc_mcom, category, status, q, searchField, page, limit } = {}) {
-  const url = buildUrl(`${API_BASE}/mcom`, { year, month, municipality, mc_mcom, category, status, q, searchField, page, limit });
+export async function fetchMComs({ year, month, municipality, mc_mcom, category, status, renewalPeriod, agmYear, q, searchField, page, limit } = {}) {
+  const url = buildUrl(`${API_BASE}/mcom`, { year, month, municipality, mc_mcom, category, status, renewalPeriod, agmYear, q, searchField, page, limit });
   const response = await fetch(url);
   return handleResponse(response);
 }
@@ -349,23 +404,91 @@ export async function submitRenewal(payload) {
   return handleResponse(response);
 }
 
-export async function approveRenewal(refNo) {
+export async function approveRenewal(refNo, actionBy) {
   const response = await fetch(`${API_BASE}/renewals/${refNo}/approve`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ actionBy }),
   });
   return handleResponse(response);
 }
 
-export async function rejectRenewal(refNo, reason) {
+export async function rejectRenewal(refNo, reason, actionBy) {
   const response = await fetch(`${API_BASE}/renewals/${refNo}/reject`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ reason }),
+    body: JSON.stringify({ reason, actionBy }),
   });
   return handleResponse(response);
 }
 
 // ========== USER API ===========
+export async function downloadReceiptPdf(record, type) {
+  const url = buildUrl(`${API_BASE}/customer-history/receipt-pdf`, { type, id: record.id });
+  const response = await fetch(url);
+  return handleResponse(response);
+}
+
+// ========== CHAT API ===========
+function getChatAuthHeaders() {
+  const userStr = sessionStorage.getItem('cma_currentUser');
+  const user = userStr ? JSON.parse(userStr) : null;
+  return { 'x-user-name': user?.name || user?.username || '' };
+}
+
+export async function fetchUnreadCounts() {
+  const response = await fetch(`${API_BASE}/chat/unread`, {
+    headers: getChatAuthHeaders()
+  });
+  return handleResponse(response);
+}
+
+export async function fetchChatUsers() {
+  const response = await fetch(`${API_BASE}/chat/users`, {
+    headers: getChatAuthHeaders()
+  });
+  return handleResponse(response);
+}
+
+export async function fetchChatMessages(targetId) {
+  const response = await fetch(`${API_BASE}/chat/messages/${targetId}`, {
+    headers: getChatAuthHeaders()
+  });
+  return handleResponse(response);
+}
+
+export async function markChatRead(targetId) {
+  const response = await fetch(`${API_BASE}/chat/read/${targetId}`, {
+    method: 'PUT',
+    headers: getChatAuthHeaders()
+  });
+  return handleResponse(response);
+}
+
+export async function sendChatMessage(receiver_id, content, metadata) {
+  const response = await fetch(`${API_BASE}/chat/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getChatAuthHeaders() },
+    body: JSON.stringify({ receiver_id, content, metadata: metadata ? JSON.stringify(metadata) : null }),
+  });
+  return handleResponse(response);
+}
+
+export async function deleteChatMessage(id) {
+  const response = await fetch(`${API_BASE}/chat/messages/${id}`, {
+    method: 'DELETE',
+    headers: getChatAuthHeaders()
+  });
+  return handleResponse(response);
+}
+
+
+export async function fetchCustomerHistory(mcType, customerNo) {
+  const url = buildUrl(`${API_BASE}/customer-history`, { mcType, customerNo });
+  const response = await fetch(url);
+  return handleResponse(response);
+}
+
 export async function fetchUsers({ q, role } = {}) {
   const url = buildUrl(`${API_BASE}/users`, { q, role });
   const response = await fetch(url);
@@ -520,6 +643,12 @@ export async function fetchNotifications({ user_id, role } = {}) {
   return handleResponse(response);
 }
 
+export async function fetchAllNotifications({ user_id, role } = {}) {
+  const url = buildUrl(`${API_BASE}/notifications`, { user_id, role, include_all: 'true' });
+  const response = await fetch(url);
+  return handleResponse(response);
+}
+
 export async function createNotification(notification) {
   const response = await fetch(`${API_BASE}/notifications`, {
     method: 'POST',
@@ -531,7 +660,6 @@ export async function createNotification(notification) {
 
 /**
  * Marks a notification as dismissed for the given user in the database.
- * This replaces the old localStorage-based dismiss approach.
  * @param {number|string} notificationId
  * @param {number|string} userId
  */
@@ -544,9 +672,22 @@ export async function dismissNotification(notificationId, userId) {
   return handleResponse(response);
 }
 
+/**
+ * Un-dismisses (restores) a notification for the given user.
+ * @param {number|string} notificationId
+ * @param {number|string} userId
+ */
+export async function undismissNotification(notificationId, userId) {
+  const response = await fetch(`${API_BASE}/notifications/${notificationId}/dismiss?user_id=${userId}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  return handleResponse(response);
+}
+
 // --- AGM Management ---
-export async function fetchAgmRecords({ q, status, year, month, page = 1, limit = 20 } = {}) {
-  const url = buildUrl(`${API_BASE}/agm`, { q, status, year, month, page, limit });
+export async function fetchAgmRecords({ q, status, year, month, meetingType, page = 1, limit = 20 } = {}) {
+  const url = buildUrl(`${API_BASE}/agm`, { q, status, year, month, meetingType, page, limit });
   const response = await fetch(url);
   return handleResponse(response);
 }
@@ -569,4 +710,114 @@ export async function deleteAgmRecord(mc_id) {
   });
   return handleResponse(response);
 }
+
+// --- Roles & Permissions Management ---
+export async function fetchRoles() {
+  const response = await fetch(`${API_BASE}/roles`);
+  return handleResponse(response);
+}
+
+export async function createRole(roleData) {
+  const response = await fetch(`${API_BASE}/roles`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(roleData),
+  });
+  return handleResponse(response);
+}
+
+export async function updateRole(roleId, roleData) {
+  const response = await fetch(`${API_BASE}/roles/${roleId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(roleData),
+  });
+  return handleResponse(response);
+}
+
+export async function deleteRole(roleId) {
+  const response = await fetch(`${API_BASE}/roles/${roleId}`, {
+    method: 'DELETE',
+  });
+  return handleResponse(response);
+}
+
+// ========== CALENDAR EVENTS API ===========
+export async function fetchCalendarEvents() {
+  const response = await fetch(`${API_BASE}/calendar-events?_t=${Date.now()}`);
+  return handleResponse(response);
+}
+
+export async function createCalendarEvent(event) {
+  const response = await fetch(`${API_BASE}/calendar-events`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(event),
+  });
+  return handleResponse(response);
+}
+
+export async function deleteCalendarEvent(id) {
+  const response = await fetch(`${API_BASE}/calendar-events/${id}`, {
+    method: 'DELETE',
+  });
+  return handleResponse(response);
+}
+
+// ========== USER PREFERENCES API ===========
+export async function fetchUserPreferences(userId) {
+  if (!userId) return {};
+  const response = await fetch(`${API_BASE}/user-prefs/${userId}`);
+  return handleResponse(response);
+}
+
+export async function setUserPreference(userId, prefKey, prefValue) {
+  if (!userId || !prefKey) return;
+  const response = await fetch(`${API_BASE}/user-prefs/${userId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prefKey, prefValue }),
+  });
+  return handleResponse(response);
+}
+
+export async function deleteUserPreference(userId, prefKey) {
+  if (!userId || !prefKey) return;
+  const response = await fetch(`${API_BASE}/user-prefs/${userId}/${prefKey}`, {
+    method: 'DELETE',
+  });
+  return handleResponse(response);
+}
+
+// ========== USER DRAFTS API ===========
+export async function fetchUserDraft(userId, draftKey) {
+  if (!userId || !draftKey) return null;
+  try {
+    const response = await fetch(`${API_BASE}/user-drafts/${userId}/${draftKey}`);
+    if (response.status === 404) return null;
+    const data = await handleResponse(response);
+    return data.draftData;
+  } catch (e) {
+    return null;
+  }
+}
+
+export async function setUserDraft(userId, draftKey, draftData) {
+  if (!userId || !draftKey) return;
+  const response = await fetch(`${API_BASE}/user-drafts/${userId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ draftKey, draftData }),
+  });
+  return handleResponse(response);
+}
+
+export async function deleteUserDraft(userId, draftKey) {
+  if (!userId || !draftKey) return;
+  const response = await fetch(`${API_BASE}/user-drafts/${userId}/${draftKey}`, {
+    method: 'DELETE',
+  });
+  return handleResponse(response);
+}
+
 

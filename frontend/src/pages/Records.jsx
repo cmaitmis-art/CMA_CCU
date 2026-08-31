@@ -19,7 +19,7 @@ const theme = {
   green: '#16a34a',
   red: '#dc2626',
   blue: '#2563eb',
-  orange: '#ea580c',
+  orange: '#f59e0b',
   purple: '#7c3aed',
 };
 
@@ -231,6 +231,7 @@ const TAB_CONFIG = {
     ],
   },
   discussions: {
+    label: 'Discussions',
     icon: 'fa-comments',
     color: theme.orange,
     endpoint: 'discussions',
@@ -284,49 +285,67 @@ function RecordViewModal({ isOpen, onClose, record, config }) {
 
   const knownKeys = config.columns.map((c) => c.key);
   const extraKeys = Object.keys(record).filter(
-    (k) => !knownKeys.includes(k) && !['id'].includes(k)
+    (k) => !knownKeys.includes(k) && !['id', 'history', 'created_at', 'created_by', 'updated_at', 'updated_by', 'modified_by'].includes(k)
+  );
+
+  const ViewRow = ({ label, value }) => (
+    <div style={{ display: 'flex', borderBottom: `1px solid ${theme.border}`, padding: '9px 4px', fontSize: 13, alignItems: 'flex-start' }}>
+      <div style={{ width: '240px', color: theme.text2, fontWeight: 600, flexShrink: 0 }}>{label}</div>
+      <div style={{ color: theme.text, wordBreak: 'break-word', flex: 1 }}>{value === null || value === undefined || value === '' ? '—' : String(value)}</div>
+    </div>
   );
 
   return (
     <div style={overlayStyle} onClick={onClose}>
-      <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+      <div style={{ ...modalStyle, display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
         <div style={modalHeader}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <i className={`fas ${config.icon}`} style={{ color: config.color }} />
-            <span style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>{config.label} — Record Details</span>
+            <span style={{ fontSize: 16, fontWeight: 700, color: theme.text }}>{config.label} — Record Details</span>
           </div>
           <button style={closeBtnStyle} onClick={onClose}>✕</button>
         </div>
-        <div style={{ padding: 20, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px 18px' }}>
+        <div style={{ padding: '0 22px 22px 22px', overflowY: 'auto', flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: theme.navy, textTransform: 'uppercase', letterSpacing: '1px', borderBottom: `1px solid ${theme.border}`, paddingBottom: 6, marginBottom: 12, marginTop: 18 }}>
+            Primary Details
+          </div>
           {config.columns.map((col) => (
-            <div key={col.key}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, color: theme.text3, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 3 }}>
-                {col.label}
-              </div>
-              <div style={{ fontSize: 13, color: theme.text, wordBreak: 'break-word' }}>
-                {col.type === 'date' ? formatDisplayDate(record[col.key]) : (record[col.key] || '—')}
-              </div>
-            </div>
+            <ViewRow 
+              key={col.key} 
+              label={col.label} 
+              value={col.type === 'date' ? formatDisplayDate(record[col.key]) : record[col.key]} 
+            />
           ))}
+          
           {extraKeys.length > 0 && (
-            <div style={{ gridColumn: 'span 2', borderTop: `1px solid ${theme.border}`, marginTop: 6, paddingTop: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: theme.navy, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 10 }}>
+            <>
+              <div style={{ fontSize: 12, fontWeight: 700, color: theme.navy, textTransform: 'uppercase', letterSpacing: '1px', borderBottom: `1px solid ${theme.border}`, paddingBottom: 6, marginBottom: 12, marginTop: 24 }}>
                 Other Saved Fields
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px 18px' }}>
-                {extraKeys.map((k) => (
-                  <div key={k}>
-                    <div style={{ fontSize: 10.5, fontWeight: 700, color: theme.text3, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 3 }}>
-                      {prettifyKey(k)}
-                    </div>
-                    <div style={{ fontSize: 13, color: theme.text, wordBreak: 'break-word' }}>
-                      {record[k] === null || record[k] === undefined || record[k] === '' ? '—' : String(record[k])}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+              {extraKeys.map((k) => (
+                <ViewRow 
+                  key={k} 
+                  label={prettifyKey(k)} 
+                  value={record[k]} 
+                />
+              ))}
+            </>
           )}
+
+          <div style={{ fontSize: 12, fontWeight: 700, color: theme.navy, textTransform: 'uppercase', letterSpacing: '1px', borderBottom: `1px solid ${theme.border}`, paddingBottom: 6, marginBottom: 12, marginTop: 24 }}>
+            Audit
+          </div>
+          <ViewRow 
+            label="Created At" 
+            value={record.created_at ? `${formatDisplayDate(record.created_at)} (By: ${record.created_by || 'System'})` : '—'} 
+          />
+          <ViewRow 
+            label="Updated At" 
+            value={record.updated_at ? `${formatDisplayDate(record.updated_at)} (By: ${record.updated_by || record.modified_by || 'System'})` : '—'} 
+          />
+        </div>
+        <div style={{ padding: '14px 22px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', background: '#fff', position: 'sticky', bottom: 0, zIndex: 1 }}>
+          <button onClick={onClose} style={btnOutline}>Close</button>
         </div>
       </div>
     </div>
@@ -349,6 +368,17 @@ export default function RecordsPage() {
   const [page, setPage] = useState(1);
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [showViewModal, setShowViewModal] = useState(false);
+  const [viewAll, setViewAll] = useState(() => {
+    return sessionStorage.getItem('cma_records_viewAll') === 'true';
+  });
+  const [isZoomed, setIsZoomed] = useState(() => {
+    return sessionStorage.getItem('cma_records_isZoomed') === 'true';
+  });
+
+  useEffect(() => {
+    sessionStorage.setItem('cma_records_viewAll', String(viewAll));
+    sessionStorage.setItem('cma_records_isZoomed', String(isZoomed));
+  }, [viewAll, isZoomed]);
 
   useEffect(() => {
     try {
@@ -360,7 +390,7 @@ export default function RecordsPage() {
   const API_BASE = (import.meta.env.VITE_API_URL || '/api').trim();
 
   async function loadTab(tab, force = false) {
-    if (!force && dataMap[tab] && dataMap[tab].length > 0) return; // Already loaded
+    if (!force && dataMap[tab] && dataMap[tab].length > 0) return dataMap[tab]; // Already loaded
 
     const cfg = TAB_CONFIG[tab];
     setLoadingMap((m) => ({ ...m, [tab]: true }));
@@ -376,9 +406,12 @@ export default function RecordsPage() {
         const data = await r.json();
         rows = data?.[cfg.responseKey] ?? [];
       }
-      setDataMap((m) => ({ ...m, [tab]: Array.isArray(rows) ? rows : [] }));
+      const finalRows = Array.isArray(rows) ? rows : [];
+      setDataMap((m) => ({ ...m, [tab]: finalRows }));
+      return finalRows;
     } catch (e) {
       setErrorMap((m) => ({ ...m, [tab]: e?.message || 'Failed to load records' }));
+      return [];
     } finally {
       setLoadingMap((m) => ({ ...m, [tab]: false }));
     }
@@ -410,15 +443,16 @@ export default function RecordsPage() {
     );
   }, [rows, searchTerm, config]);
 
-  const maxPage = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
-  const pagedRows = filteredRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const activePageSize = viewAll ? 999999 : PAGE_SIZE;
+  const maxPage = Math.max(1, Math.ceil(filteredRows.length / activePageSize));
+  const pagedRows = filteredRows.slice((page - 1) * activePageSize, page * activePageSize);
 
   const grandTotal = TAB_ORDER.reduce((sum, t) => sum + (dataMap[t]?.length || 0), 0);
   const anyLoading = TAB_ORDER.some((t) => !!loadingMap[t]);
 
-  function exportRowsToSheet(wb, key) {
+  function exportRowsToSheet(wb, key, customRows = null) {
     const cfg = TAB_CONFIG[key];
-    const source = dataMap[key] || [];
+    const source = customRows || dataMap[key] || [];
     const exportData = source.map((row) => {
       const obj = {};
       const knownKeys = new Set();
@@ -459,10 +493,16 @@ export default function RecordsPage() {
     XLSX.writeFile(wb, `${config.label.replace(/\s+/g, '_')}_Records.xlsx`);
   }
 
-  function handleExportAll() {
-    const wb = XLSX.utils.book_new();
-    TAB_ORDER.forEach((t) => exportRowsToSheet(wb, t));
-    XLSX.writeFile(wb, `All_CMA_Records_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  async function handleExportAll() {
+    try {
+      const results = await Promise.all(TAB_ORDER.map((t) => loadTab(t, true)));
+      const wb = XLSX.utils.book_new();
+      TAB_ORDER.forEach((t, i) => exportRowsToSheet(wb, t, results[i]));
+      XLSX.writeFile(wb, `All_CMA_Records_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } catch (e) {
+      console.error('Export failed:', e);
+      alert('Failed to export all records.');
+    }
   }
 
   return (
@@ -485,14 +525,14 @@ export default function RecordsPage() {
           <button style={btnOutline} onClick={loadAll} disabled={anyLoading}>
             <i className={`fas ${anyLoading ? 'fa-spinner fa-spin' : 'fa-sync-alt'}`} /> Refresh
           </button>
-          <button style={btnPrimary} onClick={async () => { await Promise.all(TAB_ORDER.map((t) => loadTab(t, true))); handleExportAll(); }}>
+          <button style={btnPrimary} onClick={handleExportAll} disabled={anyLoading}>
             <i className="fas fa-file-export" /> Export All to Excel
           </button>
         </div>
       </div>
 
       {/* Summary cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 18 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 18, overflowX: 'auto', padding: '3px' }}>
         <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: '14px 16px' }}>
           <div style={{ fontSize: 11, color: theme.text3, fontWeight: 700, textTransform: 'uppercase' }}>Total Records</div>
           <div style={{ fontSize: 24, fontWeight: 700, color: theme.text, marginTop: 4 }}>{grandTotal}</div>
@@ -578,13 +618,47 @@ export default function RecordsPage() {
           </div>
         </div>
 
-        {/* Pagination */}
+        {/* Pagination & Zoom Controls */}
+        <div className={`cma-table-card-container ${isZoomed ? 'table-fullscreen-mode' : ''}`} style={{ background: isZoomed ? '#fff' : 'transparent', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '8px 16px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
-          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}
-            style={page === 1 ? { ...btnOutline, opacity: 0.5, cursor: 'not-allowed', padding: '5px 10px', fontSize: 12 } : { ...btnOutline, padding: '5px 10px', fontSize: 12 }}>Prev</button>
-          <span style={{ fontSize: 12, color: theme.text3 }}>Page <strong style={{ color: theme.text }}>{page}</strong> / {maxPage}</span>
-          <button onClick={() => setPage((p) => Math.min(maxPage, p + 1))} disabled={page >= maxPage}
-            style={page >= maxPage ? { ...btnOutline, opacity: 0.5, cursor: 'not-allowed', padding: '5px 10px', fontSize: 12 } : { ...btnOutline, padding: '5px 10px', fontSize: 12 }}>Next</button>
+          {!viewAll && (
+            <>
+              <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}
+                style={page === 1 ? { ...btnOutline, opacity: 0.5, cursor: 'not-allowed', padding: '5px 10px', fontSize: 12 } : { ...btnOutline, padding: '5px 10px', fontSize: 12 }}>Prev</button>
+              <span style={{ fontSize: 12, color: theme.text3 }}>Page <strong style={{ color: theme.text }}>{page}</strong> / {maxPage}</span>
+              <button onClick={() => setPage((p) => Math.min(maxPage, p + 1))} disabled={page >= maxPage}
+                style={page >= maxPage ? { ...btnOutline, opacity: 0.5, cursor: 'not-allowed', padding: '5px 10px', fontSize: 12 } : { ...btnOutline, padding: '5px 10px', fontSize: 12 }}>Next</button>
+            </>
+          )}
+          <button
+            onClick={() => setViewAll(v => !v)}
+            style={{ 
+              background: viewAll ? '#10b981' : '#f1f5f9', 
+              color: viewAll ? '#ffffff' : '#334155', 
+              border: viewAll ? 'none' : '1px solid #cbd5e1', 
+              padding: '5px 12px', fontSize: 12, borderRadius: 6, marginLeft: 8, cursor: 'pointer' 
+            }}
+          >
+            <i className={loading && viewAll ? 'fas fa-spinner fa-spin' : viewAll ? 'fas fa-check-circle' : 'fas fa-list'} style={{ marginRight: 5 }} />
+            {loading && viewAll ? 'Loading All…' : viewAll ? 'Showing All Records' : 'View All Records'}
+          </button>
+          <button
+            onClick={() => {
+              const next = !isZoomed;
+              setIsZoomed(next);
+              setViewAll(next);
+            }}
+            style={{ 
+              background: '#e0e7ff', color: '#4338ca', border: '1px solid #c7d2fe', 
+              padding: '5px 12px', fontSize: 12, borderRadius: 6, marginLeft: 8, cursor: 'pointer' 
+            }}
+          >
+            {isZoomed ? (
+              <><i className="fas fa-compress" style={{ marginRight: 6 }} /> Exit Zoom</>
+            ) : (
+              <><i className="fas fa-expand" style={{ marginRight: 6 }} /> Zoom Table</>
+            )}
+          </button>
         </div>
 
         {/* Table */}
@@ -641,6 +715,7 @@ export default function RecordsPage() {
               )}
             </tbody>
           </table>
+        </div>
         </div>
       </div>
 

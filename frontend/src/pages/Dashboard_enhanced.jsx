@@ -551,7 +551,13 @@ function ActiveUsersPanel({ users }) {
   );
 }
 
-function Dashboard({ onNavigate }) {
+function Dashboard({ onNavigate, currentUser }) {
+  const hasAccess = (modId) => {
+    if (currentUser?.role?.toLowerCase() === 'admin') return true;
+    const managedModules = ['dashboard', 'registration', 'renewal_approval', 'mc', 'mcom', 'cfiles', 'complains', 'discussion', 'notifications', 'records', 'customer_history', 'reports', 'users', 'profile'];
+    if (!managedModules.includes(modId)) return true;
+    return currentUser?.permissions?.[modId]?.includes('view');
+  };
   const [stats, setStats] = useState({
     mc: 0,
     mcom: 0,
@@ -625,6 +631,7 @@ function Dashboard({ onNavigate }) {
       const [dashStats, pendingComplaintsData, pendingCfilesData, discussionsData, activeUsersData] = await Promise.all([
         fetchDashboardStats().catch(() => ({
           mc: 0,
+          mcTotal: 0,
           mcom: 0,
           cfiles: 0,
           pendingCfiles: 0,
@@ -633,6 +640,8 @@ function Dashboard({ onNavigate }) {
           pendingMcom: 0,
           pendingComplaintsOverdue: 0,
           complaints: 0,
+          closedCfiles: 0,
+          resolvedComplaints: 0,
         })),
         fetchPendingComplaints(5).catch(() => ([])),
         fetchPendingCfiles(5).catch(() => ([])),
@@ -704,14 +713,17 @@ function Dashboard({ onNavigate }) {
       </div>
 
       <div className="stats-grid">
+        {hasAccess('mc') && (
         <FadeIn delay={50}>
           <div className="stat-card" style={{ border: `1px solid ${theme.border}`, borderRadius: 12 }}>
             <div className="stat-icon si-blue shimmer"><i className="fas fa-building"></i></div>
             <div className="stat-label">MC Records</div>
-            <div className={`stat-value ${animateCounts ? 'count-animate' : ''}`}><AnimatedNumber value={stats.mc} /></div>
-            <div className="stat-change up"><i className="fas fa-arrow-up"></i> Active MCs</div>
+            <div className={`stat-value ${animateCounts ? 'count-animate' : ''}`}><AnimatedNumber value={stats.mcTotal || stats.mc} /></div>
+            <div className="stat-change up"><i className="fas fa-check"></i> {stats.mc} Active MCs</div>
           </div>
         </FadeIn>
+        )}
+        {hasAccess('mcom') && (
         <FadeIn delay={100}>
           <div className="stat-card" style={{ border: `1px solid ${theme.border}`, borderRadius: 12 }}>
             <div className="stat-icon si-teal shimmer"><i className="fas fa-city"></i></div>
@@ -720,6 +732,8 @@ function Dashboard({ onNavigate }) {
             <div className="stat-change up"><i className="fas fa-arrow-up"></i> Registered</div>
           </div>
         </FadeIn>
+        )}
+        {hasAccess('cfiles') && (
         <FadeIn delay={150}>
           <div className="stat-card" style={{ border: `1px solid ${theme.border}`, borderRadius: 12 }}>
             <div className="stat-icon si-amber shimmer"><i className="fas fa-folder-open"></i></div>
@@ -728,6 +742,8 @@ function Dashboard({ onNavigate }) {
             <div className="stat-change up"><i className="fas fa-arrow-up"></i> +5 this week</div>
           </div>
         </FadeIn>
+        )}
+        {hasAccess('cfiles') && (
         <FadeIn delay={200}>
           <div className="stat-card" style={{ border: `1px solid ${theme.border}`, borderRadius: 12 }}>
             <div className="stat-icon si-orange shimmer"><i className="fas fa-exclamation-circle"></i></div>
@@ -739,6 +755,8 @@ function Dashboard({ onNavigate }) {
             <div className="stat-change up"><i className="fas fa-arrow-up"></i> 15+ Days Overdue</div>
           </div>
         </FadeIn>
+        )}
+        {hasAccess('complains') && (
         <FadeIn delay={225}>
           <div className="stat-card" style={{ border: `1px solid ${theme.border}`, borderRadius: 12 }}>
             <div className="stat-icon si-red shimmer"><i className="fas fa-comments"></i></div>
@@ -747,6 +765,8 @@ function Dashboard({ onNavigate }) {
             <div className="stat-change up"><i className="fas fa-arrow-up"></i> All Records</div>
           </div>
         </FadeIn>
+        )}
+        {hasAccess('complains') && (
         <FadeIn delay={250}>
           <div className="stat-card complaints-card" style={{ border: `1px solid ${theme.border}`, borderRadius: 12 }}>
             <div className="stat-icon si-red shimmer"><i className="fas fa-comment-dots"></i></div>
@@ -758,10 +778,12 @@ function Dashboard({ onNavigate }) {
             <div className="stat-change up"><i className="fas fa-arrow-up"></i> Requires Action</div>
           </div>
         </FadeIn>
+        )}
       </div>
 
       {/* PENDING TASKS CARDS */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px', marginBottom: '25px' }}>
+      <div className="cma-dashboard-grid dash-pending-grid" style={{ marginBottom: '25px' }}>
+        {hasAccess('mc') && (
         <FadeIn delay={300}>
           <div className="dashboard-pending-card mc-card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: '100%' }}>
             <div>
@@ -782,7 +804,7 @@ function Dashboard({ onNavigate }) {
                   <i className="fas fa-building"></i>
                 </div>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: '16px', color: '#1a1a2e' }}>MC Management</h3>
+                  <h3 style={{ margin: 0, fontSize: '14.5px', color: '#1a1a2e' }}>MC Management</h3>
                   <span style={{ fontSize: '12px', color: '#5a6478' }}>Pending Tasks</span>
                 </div>
               </div>
@@ -807,13 +829,15 @@ function Dashboard({ onNavigate }) {
                 transition: 'background 0.2s',
               }}
               onMouseEnter={(e) => (e.target.style.backgroundColor = '#e2e8f0')}
-              onMouseLeave={(e) => (e.target.style.backgroundColor = '#f4f6fb')}
+              onMouseLeave={(e) => (e.target.style.backgroundColor = '#ffffff')}
             >
               View Pending Tasks <i className="fas fa-arrow-right" style={{ marginLeft: '5px' }}></i>
             </button>
           </div>
         </FadeIn>
+        )}
 
+        {hasAccess('mcom') && (
         <FadeIn delay={325}>
           <div className="dashboard-pending-card mcom-card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: '100%' }}>
             <div>
@@ -834,7 +858,7 @@ function Dashboard({ onNavigate }) {
                   <i className="fas fa-city"></i>
                 </div>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: '16px', color: '#1a1a2e' }}>M.Com Management</h3>
+                  <h3 style={{ margin: 0, fontSize: '14.5px', color: '#1a1a2e' }}>M.Com Management</h3>
                   <span style={{ fontSize: '12px', color: '#5a6478' }}>Pending Tasks</span>
                 </div>
               </div>
@@ -859,13 +883,15 @@ function Dashboard({ onNavigate }) {
                 transition: 'background 0.2s',
               }}
               onMouseEnter={(e) => (e.target.style.backgroundColor = '#e2e8f0')}
-              onMouseLeave={(e) => (e.target.style.backgroundColor = '#f4f6fb')}
+              onMouseLeave={(e) => (e.target.style.backgroundColor = '#ffffff')}
             >
               View Pending Tasks <i className="fas fa-arrow-right" style={{ marginLeft: '5px' }}></i>
             </button>
           </div>
         </FadeIn>
+        )}
 
+        {hasAccess('cfiles') && (
         <FadeIn delay={350}>
           <div className="dashboard-pending-card cfiles-card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: '100%' }}>
             <div>
@@ -886,7 +912,7 @@ function Dashboard({ onNavigate }) {
                   <i className="fas fa-folder-open"></i>
                 </div>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: '16px', color: '#1a1a2e' }}>C Files</h3>
+                  <h3 style={{ margin: 0, fontSize: '14.5px', color: '#1a1a2e' }}>C Files</h3>
                   <span style={{ fontSize: '12px', color: '#5a6478' }}>Pending Tasks {'>'}15 Days</span>
                 </div>
               </div>
@@ -911,13 +937,15 @@ function Dashboard({ onNavigate }) {
                 transition: 'background 0.2s',
               }}
               onMouseEnter={(e) => (e.target.style.backgroundColor = '#e2e8f0')}
-              onMouseLeave={(e) => (e.target.style.backgroundColor = '#f4f6fb')}
+              onMouseLeave={(e) => (e.target.style.backgroundColor = '#ffffff')}
             >
               View Pending Tasks <i className="fas fa-arrow-right" style={{ marginLeft: '5px' }}></i>
             </button>
           </div>
         </FadeIn>
+        )}
 
+        {hasAccess('complains') && (
         <FadeIn delay={375}>
           <div className="dashboard-pending-card complaints-card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: '100%' }}>
             <div>
@@ -938,7 +966,7 @@ function Dashboard({ onNavigate }) {
                   <i className="fas fa-comment-dots"></i>
                 </div>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: '16px', color: '#1a1a2e' }}>Complaints</h3>
+                  <h3 style={{ margin: 0, fontSize: '14.5px', color: '#1a1a2e' }}>Complaints</h3>
                   <span style={{ fontSize: '12px', color: '#5a6478' }}>Pending Tasks {'>'}15 Days</span>
                 </div>
               </div>
@@ -963,12 +991,13 @@ function Dashboard({ onNavigate }) {
                 transition: 'background 0.2s',
               }}
               onMouseEnter={(e) => (e.target.style.backgroundColor = '#e2e8f0')}
-              onMouseLeave={(e) => (e.target.style.backgroundColor = '#f4f6fb')}
+              onMouseLeave={(e) => (e.target.style.backgroundColor = '#ffffff')}
             >
               View Pending Tasks <i className="fas fa-arrow-right" style={{ marginLeft: '5px' }}></i>
             </button>
           </div>
         </FadeIn>
+        )}
       </div>
 
 
@@ -1005,21 +1034,21 @@ function Dashboard({ onNavigate }) {
               <span className="card-title">System Summary</span>
             </div>
             <div className="card-body">
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', borderBottom: `1px solid ${theme.border}`, paddingBottom: 16 }}>
+              <div className="dash-main-grid" style={{ borderBottom: `1px solid ${theme.border}`, paddingBottom: 16 }}>
                 <div style={{ textAlign: 'center' }}>
                   <div className="stat-value" style={{ color: '#1976d2' }}><AnimatedNumber value={stats.mc} /></div>
                   <div style={{ fontSize: '12px', color: 'var(--text3)' }}>Active MCs</div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                  <div className="stat-value" style={{ color: '#d32f2f' }}><AnimatedNumber value={2} /></div>
+                  <div className="stat-value" style={{ color: '#d32f2f' }}><AnimatedNumber value={stats.closedCfiles || 0} /></div>
                   <div style={{ fontSize: '12px', color: 'var(--text3)' }}>Closed Files</div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                  <div className="stat-value" style={{ color: '#f57c00' }}><AnimatedNumber value={stats.pendingComplaints} /></div>
+                  <div className="stat-value" style={{ color: '#f57c00' }}><AnimatedNumber value={stats.pendingComplaints || 0} /></div>
                   <div style={{ fontSize: '12px', color: 'var(--text3)' }}>Pending</div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                  <div className="stat-value" style={{ color: '#388e3c' }}><AnimatedNumber value={15} /></div>
+                  <div className="stat-value" style={{ color: '#388e3c' }}><AnimatedNumber value={stats.resolvedComplaints || 0} /></div>
                   <div style={{ fontSize: '12px', color: 'var(--text3)' }}>Resolved</div>
                 </div>
               </div>

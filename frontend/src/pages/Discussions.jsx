@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import { hasPermission } from '../utils/roleLabel.js';
 import '../CMAStyles.css';
 import * as XLSX from 'xlsx';
 import {
@@ -12,6 +13,7 @@ import HistoryModal from '../components/HistoryModal.jsx';
 import GenericExportModal from '../components/GenericExportModal.jsx';
 import { useAutoRefresh } from '../utils/useAutoRefresh';
 import { exportToPdfPrint } from '../utils/pdfExport';
+import '../components/mc-management/MCManagement.css';
 import { MONTH_OPTIONS, getYearFilterOptions } from '../utils/filterConstants';
 
 window.XLSX = XLSX;
@@ -202,7 +204,16 @@ const STATUS_OPTIONS = ['New', 'In Progress', 'Completed', 'Cancelled'];
 const ACTIONS_COL_WIDTH = 210; // must match the Actions <col> width in the table below
 const STATUS_COL_WIDTH = 195;  // must match the Status <col> width in the table below
 
-export default function DiscussionManagement({ currentUser, isViewOnly }) {
+export default function DiscussionManagement({ currentUser }) {
+  const canEdit = hasPermission(currentUser, 'discussion', 'edit');
+  const canDelete = hasPermission(currentUser, 'discussion', 'delete');
+  const canCreate = hasPermission(currentUser, 'discussion', 'create');
+  const canApprove = hasPermission(currentUser, 'discussion', 'approve');
+  const canViewOnly = !canEdit && !canDelete && !canCreate && !canApprove; // fallback
+
+
+
+
   const auditUserLabel = currentUser?.name && currentUser?.username
     ? `${currentUser.name} (${currentUser.username})`
     : currentUser?.name || currentUser?.username || '';
@@ -237,13 +248,26 @@ export default function DiscussionManagement({ currentUser, isViewOnly }) {
   }, [statusFilter, searchText, yearFilter, monthFilter]);
 
   const [page, setPage] = useState(1);
-  const [limit] = useState(20);
+  const [viewAll, setViewAll] = useState(() => {
+    return sessionStorage.getItem('cma_disc_viewAll') === 'true';
+  });
+  const [isZoomed, setIsZoomed] = useState(() => {
+    return sessionStorage.getItem('cma_disc_isZoomed') === 'true';
+  });
+
+  useEffect(() => {
+    sessionStorage.setItem('cma_disc_viewAll', String(viewAll));
+    sessionStorage.setItem('cma_disc_isZoomed', String(isZoomed));
+  }, [viewAll, isZoomed]);
+
+  const limit = viewAll ? 999999 : 20;
   const [totalCount, setTotalCount] = useState(0);
   const [showModal, setShowModal] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [toast, setToast] = useState(null);
+  const [isImporting, setIsImporting] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [showViewModal, setShowViewModal] = useState(false);
   const [viewRecord, setViewRecord] = useState(null);
@@ -407,6 +431,48 @@ export default function DiscussionManagement({ currentUser, isViewOnly }) {
     }
   };
 
+  const handleTranscribeSubmit = async () => {
+    if (!transcribeFile) {
+      setTranscriptionError('Please select an audio file first.');
+      return;
+    }
+
+    setIsTranscribing(true);
+    setTranscriptionError('');
+    setTranscriptionResult('');
+
+    const API_BASE = import.meta.env.VITE_API_URL ?? '/api';
+    const formData = new FormData();
+    formData.append('audio', transcribeFile);
+
+    try {
+      const r = await fetch(`${API_BASE}/transcribe`, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await r.json().catch(() => ({}));
+
+      if (!r.ok) {
+        throw new Error(data.error || data.details || 'Transcription failed');
+      }
+
+      setTranscriptionResult(data.text);
+    } catch (err) {
+      setTranscriptionError(err.message);
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  const handleSaveTranscriptionToForm = () => {
+    handleOpenModal();
+    setFormData(prev => ({
+      ...prev,
+      respond: transcriptionResult,
+    }));
+    setShowTranscribeModal(false);
+  };
+
   const handleDelete = (id) => {
     setConfirmDialog({
       title: 'Delete Discussion',
@@ -545,6 +611,7 @@ export default function DiscussionManagement({ currentUser, isViewOnly }) {
     if (!file) return;
     if (typeof window.XLSX === 'undefined') return showToast('XLSX library not loaded', 'error');
     try {
+      setIsImporting(true);
       const data = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (ev) => resolve(ev.target.result);
@@ -647,6 +714,7 @@ export default function DiscussionManagement({ currentUser, isViewOnly }) {
       showToast(err.message || 'Import failed', 'error');
       console.error('Import error:', err);
     } finally {
+      setIsImporting(false);
       e.target.value = '';
     }
   }
@@ -821,8 +889,6 @@ export default function DiscussionManagement({ currentUser, isViewOnly }) {
   }, [discussions, searchText, statusFilter]);
 
   function handlePrintAllNotices() {
-    const w = window.open('', '_blank');
-    if (!w) return;
     const noticeHtml = filteredDiscussions.map((d) => `
       <div class="notice">
         <div class="notice-hdr">
@@ -876,7 +942,7 @@ export default function DiscussionManagement({ currentUser, isViewOnly }) {
       </div>
     `).join('<div class="page-break"></div>');
 
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8">
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
     <title>Notices — All Discussions</title>
     <style>
       @page { size: A4; margin: 0 !important }
@@ -908,9 +974,13 @@ export default function DiscussionManagement({ currentUser, isViewOnly }) {
       .footer { margin-top: 14px; font-size: 9px; color: #94a0b4; border-top: 1px solid #e2e8f0; padding-top: 8px; text-align: right }
     </style></head><body>
     ${noticeHtml}
-    </body></html>`);
-    w.document.close();
-    setTimeout(() => w.print(), 400);
+    <script>window.addEventListener('load', function(){ setTimeout(function(){ window.print(); }, 400); });</script>
+    </body></html>`;
+
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank', 'noopener,noreferrer');
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
   const stats = useMemo(() => {
@@ -952,7 +1022,7 @@ export default function DiscussionManagement({ currentUser, isViewOnly }) {
             <i className="fas fa-file-export" /> Export
           </button>
           {/* Download Import Template */}
-          {!isViewOnly && (
+          {canEdit && (
             <button
               onClick={downloadImportTemplate}
               style={btnOutline}
@@ -962,7 +1032,7 @@ export default function DiscussionManagement({ currentUser, isViewOnly }) {
             </button>
           )}
           {/* Import Excel */}
-          {!isViewOnly && (
+          {canEdit && (
             <label style={{ ...btnOutline, cursor: 'pointer', margin: 0 }} title="Import from Excel. Expected columns: File No, Date, Appointment, Complaint, Response, Meeting Date & Time, Venue, Reminder Date, Reminder Notes, Officer, Status">
               <i className="fas fa-download" /> Import
               <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={importExcel} />
@@ -977,7 +1047,7 @@ export default function DiscussionManagement({ currentUser, isViewOnly }) {
             <i className="fas fa-print" /> Print
           </button>
           {/* Delete All — styled like other pages */}
-          {!isViewOnly && (
+          {canEdit && (
             <button
               onClick={() => handleDeleteAll()}
               style={{ ...btnOutline, color: theme.red, borderColor: theme.red }}
@@ -986,7 +1056,7 @@ export default function DiscussionManagement({ currentUser, isViewOnly }) {
               <i className="fas fa-trash" /> Delete All
             </button>
           )}
-          {!isViewOnly && (
+          {canEdit && (
             <button onClick={() => handleOpenModal()} style={btnPrimary}>
               <i className="fas fa-plus" /> New Discussion
             </button>
@@ -1081,544 +1151,623 @@ export default function DiscussionManagement({ currentUser, isViewOnly }) {
           </div>
         </div>
 
-        {/* Table */}
-        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 340px)', minHeight: '200px', border: `1px solid ${theme.border}`, borderRadius: 8 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: "var(--font-sans)", tableLayout: 'fixed', minWidth: 1475 }}>
-            <colgroup>
-              <col style={{ width: 160 }} />
-              <col style={{ width: 90 }} />
-              <col style={{ width: 140 }} />
-              <col style={{ width: 'auto' }} />
-              <col style={{ width: 160 }} />
-              <col style={{ width: 140 }} />
-              <col style={{ width: 100 }} />
-              <col style={{ width: 120 }} />
-              <col style={{ width: 195 }} />
-              <col style={{ width: 210 }} />
-            </colgroup>
-            <thead>
-              <tr style={{ height: 42 }}>
-                {[
-                  'File No',
-                  'Date',
-                  'Appointment',
-                  'Complaint',
-                  'Respond',
-                  'Meeting Date & Time',
-                  'Venue',
-                  'Reminder',
-                  'Status',
-                  'Actions',
-                ].map((label) => (
-                  <th
-                    key={label}
-                    style={{
-                      textAlign: 'left',
-                      borderBottom: `1px solid ${theme.border}`,
-                      background: '#f8fafc',
-                      color: theme.text3,
-                      fontSize: 11,
-                      letterSpacing: '.6px',
-                      textTransform: 'uppercase',
-                      padding: '8px 8px',
-                      fontFamily: "var(--font-sans)",
-                      borderRight: `1px solid ${theme.border}`,
-                      position: 'sticky',
-                      top: 0,
-                      zIndex: label === 'Actions' || label === 'Status' ? 30 : 20,
-                      backgroundClip: 'padding-box',
-                      ...(label === 'Actions'
-                        ? { right: 0, width: ACTIONS_COL_WIDTH, minWidth: ACTIONS_COL_WIDTH, maxWidth: ACTIONS_COL_WIDTH, borderLeft: '1px solid #cbd5e1', boxShadow: 'none' }
-                        : {}),
-                      ...(label === 'Status'
-                        ? { right: ACTIONS_COL_WIDTH, width: STATUS_COL_WIDTH, minWidth: STATUS_COL_WIDTH, maxWidth: STATUS_COL_WIDTH, borderLeft: '1px solid #cbd5e1', boxShadow: 'none' }
-                        : {}),
-                    }}
-                    className={label === 'Actions' ? 'mc-th-actions' : label === 'Status' ? 'mc-th-status' : ''}
-                  >
-                    {label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={10} style={{ padding: 24, textAlign: 'center', color: theme.text3 }}>
-                    Loading discussions...
-                  </td>
-                </tr>
-              ) : filteredDiscussions.length === 0 ? (
-                <tr>
-                  <td colSpan={10} style={{ padding: 24, textAlign: 'center', color: theme.text3 }}>
-                    No discussions found
-                  </td>
-                </tr>
-              ) : (
-                filteredDiscussions.map((discussion) => (
-                  <tr
-                    key={discussion.id}
-                    style={{ borderBottom: `1px solid ${theme.border}`, height: 44 }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = ''}
-                  >
-                    <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={discussion.file_no}>{discussion.file_no}</td>
-                    <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatDate(discussion.date)}</td>
-                    <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, maxWidth: 240, verticalAlign: 'top' }}>
-                      <div style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'pre-wrap', paddingRight: 4 }} title={discussion.appointment}>{discussion.appointment}</div>
-                    </td>
-                    <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, maxWidth: 200, verticalAlign: 'top' }}>
-                      <div style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'pre-wrap', paddingRight: 4 }} title={discussion.complaint}>{discussion.complaint}</div>
-                    </td>
-                    <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, maxWidth: 180, verticalAlign: 'top' }}>
-                      <div style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'pre-wrap', paddingRight: 4 }} title={discussion.respond}>{discussion.respond}</div>
-                    </td>
-                    <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{discussion.meeting_date_time ? formatDateTime(discussion.meeting_date_time) : '—'}</td>
-                    <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={discussion.venue}>{discussion.venue || '—'}</td>
-                    <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, height: 44, overflow: 'hidden' }}>
-                      {discussion.reminder_date ? (
-                        <div
-                          title={`${formatDate(discussion.reminder_date)}${discussion.reminder_notes ? ` - ${discussion.reminder_notes}` : ''}`}
-                          style={{ overflow: 'hidden', maxHeight: 20 }}
-                        >
-                          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatDate(discussion.reminder_date)}</div>
-                          {discussion.reminder_notes && <div style={{ fontSize: 11, color: theme.text3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{discussion.reminder_notes}</div>}
-                        </div>
-                      ) : (
-                        '—'
-                      )}
-                    </td>
-                    <td className="mc-td-status" style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", position: 'sticky', right: ACTIONS_COL_WIDTH, width: STATUS_COL_WIDTH, minWidth: STATUS_COL_WIDTH, maxWidth: STATUS_COL_WIDTH, zIndex: 10, background: '#ffffff', borderLeft: '1px solid #e2e8f0', boxShadow: 'none', backgroundClip: 'padding-box', overflow: 'hidden' }}>
-                      <span
-                        style={{
-                          display: 'inline-block',
-                          padding: '3px 9px',
-                          borderRadius: 6,
-                          fontSize: 12,
-                          fontWeight: 600,
-                          background:
-                            discussion.status === 'Completed'
-                              ? '#d1fae5'
-                              : discussion.status === 'In Progress'
-                                ? '#dbeafe'
-                                : discussion.status === 'Cancelled'
-                                  ? '#fee2e2'
-                                  : '#fef3c7',
-                          color:
-                            discussion.status === 'Completed'
-                              ? '#065f46'
-                              : discussion.status === 'In Progress'
-                                ? '#0c2d6b'
-                                : discussion.status === 'Cancelled'
-                                  ? '#7f1d1d'
-                                  : '#92400e',
-                        }}
-                      >
-                        {discussion.status}
-                      </span>
-                    </td>
-                    <td className="mc-td-actions" style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", whiteSpace: 'nowrap', overflow: 'visible', position: 'sticky', right: 0, width: ACTIONS_COL_WIDTH, minWidth: ACTIONS_COL_WIDTH, maxWidth: ACTIONS_COL_WIDTH, zIndex: 10, background: '#ffffff', borderLeft: '1px solid #e2e8f0', boxShadow: 'none', backgroundClip: 'padding-box' }}>
-                      <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-start', alignItems: 'center' }}>
-                        <ActionBtn icon="fas fa-eye" color={theme.blue} title="View" onClick={() => { setViewRecord(discussion); setShowViewModal(true); }} />
-                        <ActionBtn icon="fas fa-history" color={theme.text2} title="History" onClick={() => { setSelectedHistoryRecord(discussion); setShowHistoryModal(true); }} />
-                        {!isViewOnly && <ActionBtn icon="fas fa-edit" color="#f59e0b" title="Edit" onClick={() => handleOpenModal(discussion)} />}
-                        <ActionBtn icon="fas fa-print" color="#8b5cf6" title="Print Notice" onClick={() => printRow(discussion)} />
-                        {!isViewOnly && <ActionBtn icon="fas fa-trash" color={theme.red} title="Delete" onClick={() => handleDelete(discussion.id)} />}
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+        {/* Table Container with Zoom */}
+        <div className={`cma-table-card-container ${isZoomed ? 'table-fullscreen-mode' : ''}`} style={{ background: isZoomed ? '#fff' : 'transparent', display: 'flex', flexDirection: 'column' }}>
 
-        {/* Pagination */}
-        {pageCount > 1 && (
-          <div style={{ padding: '16px 20px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'center', gap: 6 }}>
-            <button
-              onClick={() => setPage(Math.max(1, page - 1))}
-              disabled={page === 1}
-              style={{ ...btnSecondary, padding: '8px 12px', fontSize: 12 }}
-            >
-              Prev
-            </button>
-            {Array.from({ length: pageCount }, (_, i) => i + 1).map((p) => (
+          {/* Pagination Container */}
+          <div style={{ padding: '10px 16px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+            <div style={{ fontSize: 13, color: theme.text2 }}>
+              Showing <strong>{discussions.length}</strong> of <strong>{totalCount}</strong> discussions
+            </div>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              {!viewAll && totalCount > limit && (() => {
+                const pageCount = Math.ceil(totalCount / limit);
+                return (
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <button
+                      onClick={() => setPage(Math.max(1, page - 1))}
+                      disabled={page === 1}
+                      style={{ ...btnSecondary, padding: '5px 10px', fontSize: 12 }}
+                    >
+                      Prev
+                    </button>
+                    {Array.from({ length: Math.min(5, pageCount) }, (_, i) => {
+                      let p = page > 2 ? page - 2 + i : i + 1;
+                      if (p > pageCount) p = pageCount - (4 - i);
+                      if (p < 1) p = 1;
+                      return (
+                        <button
+                          key={i}
+                          onClick={() => setPage(p)}
+                          style={{
+                            ...btnSecondary,
+                            padding: '5px 10px',
+                            fontSize: 12,
+                            background: p === page ? theme.navy : '#fff',
+                            color: p === page ? '#fff' : theme.text,
+                          }}
+                        >
+                          {p}
+                        </button>
+                      );
+                    })}
+                    <button
+                      onClick={() => setPage(Math.min(pageCount, page + 1))}
+                      disabled={page === pageCount}
+                      style={{ ...btnSecondary, padding: '5px 10px', fontSize: 12 }}
+                    >
+                      Next
+                    </button>
+                  </div>
+                );
+              })()}
               <button
-                key={p}
-                onClick={() => setPage(p)}
+                onClick={() => setViewAll(v => !v)}
                 style={{
-                  ...btnSecondary,
-                  padding: '8px 12px',
-                  fontSize: 12,
-                  background: p === page ? theme.navy : '#fff',
-                  color: p === page ? '#fff' : theme.text,
+                  background: viewAll ? '#10b981' : '#f1f5f9',
+                  color: viewAll ? '#ffffff' : '#334155',
+                  border: viewAll ? 'none' : '1px solid #cbd5e1',
+                  padding: '5px 12px', fontSize: 12, borderRadius: 6, marginLeft: 8, cursor: 'pointer'
                 }}
               >
-                {p}
+                <i className={loading && viewAll ? 'fas fa-spinner fa-spin' : viewAll ? 'fas fa-check-circle' : 'fas fa-list'} style={{ marginRight: 5 }} />
+                {loading && viewAll ? 'Loading All…' : viewAll ? 'Showing All Records' : 'View All Records'}
               </button>
-            ))}
-            <button
-              onClick={() => setPage(Math.min(pageCount, page + 1))}
-              disabled={page === pageCount}
-              style={{ ...btnSecondary, padding: '8px 12px', fontSize: 12 }}
-            >
-              Next
-            </button>
+              <button
+                onClick={() => {
+                  const next = !isZoomed;
+                  setIsZoomed(next);
+                  setViewAll(next);
+                }}
+                style={{
+                  background: '#e0e7ff', color: '#4338ca', border: '1px solid #c7d2fe',
+                  padding: '5px 12px', fontSize: 12, borderRadius: 6, marginLeft: 8, cursor: 'pointer'
+                }}
+              >
+                {isZoomed ? (
+                  <><i className="fas fa-compress" style={{ marginRight: 6 }} /> Exit Zoom</>
+                ) : (
+                  <><i className="fas fa-expand" style={{ marginRight: 6 }} /> Zoom Table</>
+                )}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 340px)', minHeight: '200px', borderBottom: `1px solid ${theme.border}`, borderRadius: '0 0 8px 8px' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: "var(--font-sans)", tableLayout: 'fixed', minWidth: 1475 }}>
+              <colgroup>
+                <col style={{ width: 160 }} />
+                <col style={{ width: 90 }} />
+                <col style={{ width: 140 }} />
+                <col style={{ width: 'auto' }} />
+                <col style={{ width: 160 }} />
+                <col style={{ width: 140 }} />
+                <col style={{ width: 100 }} />
+                <col style={{ width: 120 }} />
+                <col style={{ width: 195 }} />
+                <col style={{ width: 210 }} />
+              </colgroup>
+              <thead>
+                <tr style={{ height: 42 }}>
+                  {[
+                    'File No',
+                    'Date',
+                    'Appointment',
+                    'Complaint',
+                    'Respond',
+                    'Meeting Date & Time',
+                    'Venue',
+                    'Reminder',
+                    'Status',
+                    'Actions',
+                  ].map((label) => (
+                    <th
+                      key={label}
+                      style={{
+                        textAlign: 'left',
+                        borderBottom: `1px solid ${theme.border}`,
+                        background: '#f8fafc',
+                        color: theme.text3,
+                        fontSize: 11,
+                        letterSpacing: '.6px',
+                        textTransform: 'uppercase',
+                        padding: '8px 8px',
+                        fontFamily: "var(--font-sans)",
+                        borderRight: `1px solid ${theme.border}`,
+                        position: 'sticky',
+                        top: 0,
+                        zIndex: label === 'Actions' || label === 'Status' ? 30 : 20,
+                        backgroundClip: 'padding-box',
+                        ...(label === 'Actions'
+                          ? { right: 0, width: ACTIONS_COL_WIDTH, minWidth: ACTIONS_COL_WIDTH, maxWidth: ACTIONS_COL_WIDTH, borderLeft: '1px solid #cbd5e1', boxShadow: 'none' }
+                          : {}),
+                        ...(label === 'Status'
+                          ? { right: ACTIONS_COL_WIDTH, width: STATUS_COL_WIDTH, minWidth: STATUS_COL_WIDTH, maxWidth: STATUS_COL_WIDTH, borderLeft: '1px solid #cbd5e1', boxShadow: 'none' }
+                          : {}),
+                      }}
+                      className={label === 'Actions' ? 'mc-th-actions' : label === 'Status' ? 'mc-th-status' : ''}
+                    >
+                      {label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td colSpan={10} style={{ padding: 24, textAlign: 'center', color: theme.text3 }}>
+                      Loading discussions...
+                    </td>
+                  </tr>
+                ) : filteredDiscussions.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} style={{ padding: 24, textAlign: 'center', color: theme.text3 }}>
+                      No discussions found
+                    </td>
+                  </tr>
+                ) : (
+                  filteredDiscussions.map((discussion) => (
+                    <tr
+                      key={discussion.id}
+                      style={{ borderBottom: `1px solid ${theme.border}`, height: 44 }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = ''}
+                    >
+                      <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={discussion.file_no}>{discussion.file_no}</td>
+                      <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatDate(discussion.date)}</td>
+                      <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, maxWidth: 240, verticalAlign: 'top' }}>
+                        <div style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'pre-wrap', paddingRight: 4 }} title={discussion.appointment}>{discussion.appointment}</div>
+                      </td>
+                      <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, maxWidth: 200, verticalAlign: 'top' }}>
+                        <div style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'pre-wrap', paddingRight: 4 }} title={discussion.complaint}>{discussion.complaint}</div>
+                      </td>
+                      <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, maxWidth: 180, verticalAlign: 'top' }}>
+                        <div style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'pre-wrap', paddingRight: 4 }} title={discussion.respond}>{discussion.respond}</div>
+                      </td>
+                      <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{discussion.meeting_date_time ? formatDateTime(discussion.meeting_date_time) : '—'}</td>
+                      <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={discussion.venue}>{discussion.venue || '—'}</td>
+                      <td style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", color: theme.text, height: 44, overflow: 'hidden' }}>
+                        {discussion.reminder_date ? (
+                          <div
+                            title={`${formatDate(discussion.reminder_date)}${discussion.reminder_notes ? ` - ${discussion.reminder_notes}` : ''}`}
+                            style={{ overflow: 'hidden', maxHeight: 20 }}
+                          >
+                            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatDate(discussion.reminder_date)}</div>
+                            {discussion.reminder_notes && <div style={{ fontSize: 11, color: theme.text3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{discussion.reminder_notes}</div>}
+                          </div>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="mc-td-status" style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", position: 'sticky', right: ACTIONS_COL_WIDTH, width: STATUS_COL_WIDTH, minWidth: STATUS_COL_WIDTH, maxWidth: STATUS_COL_WIDTH, zIndex: 10, background: '#ffffff', borderLeft: '1px solid #e2e8f0', boxShadow: 'none', backgroundClip: 'padding-box', overflow: 'hidden' }}>
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            padding: '3px 9px',
+                            borderRadius: 6,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            background:
+                              discussion.status === 'Completed'
+                                ? '#d1fae5'
+                                : discussion.status === 'In Progress'
+                                  ? '#dbeafe'
+                                  : discussion.status === 'Cancelled'
+                                    ? '#fee2e2'
+                                    : '#fef3c7',
+                            color:
+                              discussion.status === 'Completed'
+                                ? '#065f46'
+                                : discussion.status === 'In Progress'
+                                  ? '#0c2d6b'
+                                  : discussion.status === 'Cancelled'
+                                    ? '#7f1d1d'
+                                    : '#92400e',
+                          }}
+                        >
+                          {discussion.status}
+                        </span>
+                      </td>
+                      <td className="mc-td-actions" style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", whiteSpace: 'nowrap', overflow: 'visible', position: 'sticky', right: 0, width: ACTIONS_COL_WIDTH, minWidth: ACTIONS_COL_WIDTH, maxWidth: ACTIONS_COL_WIDTH, zIndex: 10, background: '#ffffff', borderLeft: '1px solid #e2e8f0', boxShadow: 'none', backgroundClip: 'padding-box' }}>
+                        <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-start', alignItems: 'center' }}>
+                          <ActionBtn icon="fas fa-eye" color={theme.blue} title="View" onClick={() => { setViewRecord(discussion); setShowViewModal(true); }} />
+                          {canEdit && <ActionBtn icon="fas fa-history" color={theme.text2} title="History" onClick={() => { setSelectedHistoryRecord(discussion); setShowHistoryModal(true); }} />}
+                          {canEdit && <ActionBtn icon="fas fa-edit" color="#f59e0b" title="Edit" onClick={() => handleOpenModal(discussion)} />}
+                          {canEdit && <ActionBtn icon="fas fa-print" color="#8b5cf6" title="Print Notice" onClick={() => printRow(discussion)} />}
+                          {canEdit && <ActionBtn icon="fas fa-trash" color={theme.red} title="Delete" onClick={() => handleDelete(discussion.id)} />}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+        </div>
+
+        {/* View Modal */}
+        {showViewModal && viewRecord && (
+          <div style={overlayStyle} onClick={() => setShowViewModal(false)}>
+            <div style={{ ...modalStyle, padding: 24 }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.border}`, paddingBottom: 14, marginBottom: 18 }}>
+                <span style={{ fontSize: 16, fontWeight: 700, color: theme.navy }}>Discussion Details — {viewRecord.file_no || '—'}</span>
+                <button onClick={() => setShowViewModal(false)} style={closeBtnStyle}>✕</button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <SectionLabel>Meeting Details</SectionLabel>
+                <ViewField label="Date" value={formatDate(viewRecord.date)} />
+                <ViewField label="File No" value={viewRecord.file_no} />
+                <ViewField label="Appointment" value={viewRecord.appointment} />
+                <ViewField label="Officer" value={viewRecord.officer} />
+                <ViewField label="Meeting Date & Time" value={viewRecord.meeting_date_time ? formatDateTime(viewRecord.meeting_date_time) : '—'} />
+                <ViewField label="Venue" value={viewRecord.venue} />
+                <ViewField label="Reminder Date" value={formatDate(viewRecord.reminder_date)} />
+                <ViewField label="Status" value={viewRecord.status} />
+
+                <SectionLabel>Complaint &amp; Response</SectionLabel>
+                <ViewField label="Complaint" value={viewRecord.complaint} />
+                <ViewField label="Response / Remarks" value={viewRecord.respond} />
+                <ViewField label="Reminder Notes" value={viewRecord.reminder_notes} />
+
+                <SectionLabel>Audit Info</SectionLabel>
+                <ViewField label="Created By" value={viewRecord.created_by} />
+                <ViewField label="Modified By" value={viewRecord.modified_by} />
+              </div>
+
+              <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: 14, marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                {canEdit && (
+                  <button
+                    onClick={() => {
+                      setShowViewModal(false);
+                      handleOpenModal(viewRecord);
+                    }}
+                    style={btnPrimary}
+                  >
+                    <i className="fas fa-edit" /> Edit
+                  </button>
+                )}
+                <button onClick={() => setShowViewModal(false)} style={btnSecondary}>Close</button>
+              </div>
+            </div>
           </div>
         )}
-      </div>
 
-      {/* View Modal */}
-      {showViewModal && viewRecord && (
-        <div style={overlayStyle} onClick={() => setShowViewModal(false)}>
-          <div style={{ ...modalStyle, padding: 24 }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.border}`, paddingBottom: 14, marginBottom: 18 }}>
-              <span style={{ fontSize: 16, fontWeight: 700, color: theme.navy }}>Discussion Details — {viewRecord.file_no || '—'}</span>
-              <button onClick={() => setShowViewModal(false)} style={closeBtnStyle}>✕</button>
-            </div>
+        <HistoryModal
+          isOpen={showHistoryModal}
+          onClose={() => { setShowHistoryModal(false); setSelectedHistoryRecord(null); }}
+          record={selectedHistoryRecord}
+          theme={theme}
+        />
 
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <SectionLabel>Meeting Details</SectionLabel>
-              <ViewField label="Date" value={formatDate(viewRecord.date)} />
-              <ViewField label="File No" value={viewRecord.file_no} />
-              <ViewField label="Appointment" value={viewRecord.appointment} />
-              <ViewField label="Officer" value={viewRecord.officer} />
-              <ViewField label="Meeting Date & Time" value={viewRecord.meeting_date_time ? formatDateTime(viewRecord.meeting_date_time) : '—'} />
-              <ViewField label="Venue" value={viewRecord.venue} />
-              <ViewField label="Reminder Date" value={formatDate(viewRecord.reminder_date)} />
-              <ViewField label="Status" value={viewRecord.status} />
-
-              <SectionLabel>Complaint &amp; Response</SectionLabel>
-              <ViewField label="Complaint" value={viewRecord.complaint} />
-              <ViewField label="Response / Remarks" value={viewRecord.respond} />
-              <ViewField label="Reminder Notes" value={viewRecord.reminder_notes} />
-
-              <SectionLabel>Audit Info</SectionLabel>
-              <ViewField label="Created By" value={viewRecord.created_by} />
-              <ViewField label="Modified By" value={viewRecord.modified_by} />
-            </div>
-
-            <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: 14, marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-              {!isViewOnly && (
-                <button
-                  onClick={() => {
-                    setShowViewModal(false);
-                    handleOpenModal(viewRecord);
-                  }}
-                  style={btnPrimary}
-                >
-                  <i className="fas fa-edit" /> Edit
-                </button>
-              )}
-              <button onClick={() => setShowViewModal(false)} style={btnSecondary}>Close</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <HistoryModal
-        isOpen={showHistoryModal}
-        onClose={() => { setShowHistoryModal(false); setSelectedHistoryRecord(null); }}
-        record={selectedHistoryRecord}
-        theme={theme}
-      />
-
-      {/* Add / Edit Modal */}
-      {showModal && (
-        <div style={overlayStyle} onClick={handleCloseModal}>
-          <form
-            onSubmit={handleSubmit}
-            style={{ ...modalStyle, padding: 24 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 14 }}>
-              <span style={{ fontSize: 16, fontWeight: 700, color: theme.navy }}>{editingId ? 'Edit Discussion' : 'New Discussion'}</span>
-              <button type="button" onClick={handleCloseModal} style={closeBtnStyle}>✕</button>
-            </div>
-
-            <div style={{ padding: '0 0px', borderBottom: `1px solid ${theme.border}`, marginBottom: 18, display: 'flex', background: theme.bg, position: 'sticky', top: 0, zIndex: 10, justifyContent: 'flex-end' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0' }}>
-                <label htmlFor="disc_form_status" style={{ fontSize: 12, fontWeight: 600, color: theme.text2 }}>Status:</label>
-                <select
-                  id="disc_form_status"
-                  name="disc_form_status"
-                  value={formData.status || 'New'}
-                  onChange={e => setFormData({ ...formData, status: e.target.value })}
-                  disabled={!editingId}
-                  style={{ width: 130, padding: '5px 10px', borderRadius: 6, border: `1px solid ${theme.border}`, background: '#fff', outline: 'none', fontSize: 13, fontWeight: 700, color: formData.status === 'Completed' ? theme.green : formData.status === 'In Progress' ? theme.blue : formData.status === 'Cancelled' ? theme.red : theme.text, opacity: !editingId ? 0.7 : 1, cursor: !editingId ? 'not-allowed' : 'pointer' }}
-                >
-                  <option value="New" disabled={!editingId}>New</option>
-                  <option value="In Progress">In Progress</option>
-                  <option value="Completed">Completed</option>
-                  <option value="Cancelled">Cancelled</option>
-                </select>
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 14, marginBottom: 20 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <label htmlFor="disc_form_date" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Date</label>
-                <input
-                  id="disc_form_date"
-                  name="disc_form_date"
-                  type="date"
-                  value={formData.date}
-                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                  style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
-                  required
-                />
+        {/* Add / Edit Modal */}
+        {showModal && (
+          <div style={overlayStyle} onClick={handleCloseModal}>
+            <form
+              onSubmit={handleSubmit}
+              style={{ ...modalStyle, padding: 24 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 14 }}>
+                <span style={{ fontSize: 16, fontWeight: 700, color: theme.navy }}>{editingId ? 'Edit Discussion' : 'New Discussion'}</span>
+                <button type="button" onClick={handleCloseModal} style={closeBtnStyle}>✕</button>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <label htmlFor="disc_form_file_no" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>File No *</label>
-                <input
-                  id="disc_form_file_no"
-                  name="disc_form_file_no"
-                  type="text"
-                  placeholder="e.g. CMA/REG/2026/001"
-                  value={formData.file_no}
-                  onChange={(e) => setFormData({ ...formData, file_no: e.target.value })}
-                  style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
-                  required
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <label htmlFor="disc_form_appointment" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Appointment / To *</label>
-                <textarea
-                  id="disc_form_appointment"
-                  name="disc_form_appointment"
-                  placeholder="e.g. Ms. Rikaza,\nCountry Director..."
-                  value={formData.appointment}
-                  onChange={(e) => setFormData({ ...formData, appointment: e.target.value })}
-                  style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13, resize: 'vertical' }}
-                  rows={4}
-                  required
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <label htmlFor="disc_form_officer" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Officer</label>
-                <input
-                  id="disc_form_officer"
-                  name="disc_form_officer"
-                  type="text"
-                  placeholder="e.g. A. Perera"
-                  value={formData.officer}
-                  onChange={(e) => setFormData({ ...formData, officer: e.target.value })}
-                  style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
-                />
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
-                  <label htmlFor="disc_form_meeting_date" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Meeting Date</label>
-                  <input
-                    id="disc_form_meeting_date"
-                    name="disc_form_meeting_date"
-                    type="date"
-                    value={formData.meeting_date}
-                    onChange={(e) => setFormData({ ...formData, meeting_date: e.target.value })}
-                    style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
-                  />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
-                  <label htmlFor="disc_form_meeting_time" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Time</label>
-                  <input
-                    id="disc_form_meeting_time"
-                    name="disc_form_meeting_time"
-                    type="time"
-                    value={formData.meeting_time}
-                    onChange={(e) => setFormData({ ...formData, meeting_time: e.target.value })}
-                    style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
-                  />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
-                  <label htmlFor="disc_form_meeting_ampm" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>AM / PM</label>
+              <div style={{ padding: '0 0px', borderBottom: `1px solid ${theme.border}`, marginBottom: 18, display: 'flex', background: theme.bg, position: 'sticky', top: 0, zIndex: 10, justifyContent: 'flex-end' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0' }}>
+                  <label htmlFor="disc_form_status" style={{ fontSize: 12, fontWeight: 600, color: theme.text2 }}>Status:</label>
                   <select
-                    id="disc_form_meeting_ampm"
-                    name="disc_form_meeting_ampm"
-                    value={formData.meeting_ampm}
-                    onChange={(e) => setFormData({ ...formData, meeting_ampm: e.target.value })}
-                    style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
+                    id="disc_form_status"
+                    name="disc_form_status"
+                    value={formData.status || 'New'}
+                    onChange={e => setFormData({ ...formData, status: e.target.value })}
+                    disabled={!editingId}
+                    style={{ width: 130, padding: '5px 10px', borderRadius: 6, border: `1px solid ${theme.border}`, background: '#fff', outline: 'none', fontSize: 13, fontWeight: 700, color: formData.status === 'Completed' ? theme.green : formData.status === 'In Progress' ? theme.blue : formData.status === 'Cancelled' ? theme.red : theme.text, opacity: !editingId ? 0.7 : 1, cursor: !editingId ? 'not-allowed' : 'pointer' }}
                   >
-                    <option value="AM">AM</option>
-                    <option value="PM">PM</option>
+                    <option value="New" disabled={!editingId}>New</option>
+                    <option value="In Progress">In Progress</option>
+                    <option value="Completed">Completed</option>
+                    <option value="Cancelled">Cancelled</option>
                   </select>
                 </div>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <label htmlFor="disc_form_venue" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Venue</label>
-                <input
-                  id="disc_form_venue"
-                  name="disc_form_venue"
-                  type="text"
-                  placeholder="e.g. Conference Room A"
-                  value={formData.venue}
-                  onChange={(e) => setFormData({ ...formData, venue: e.target.value })}
-                  style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <label htmlFor="disc_form_reminder_date" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Reminder Date</label>
-                <input
-                  id="disc_form_reminder_date"
-                  name="disc_form_reminder_date"
-                  type="date"
-                  value={formData.reminder_date}
-                  onChange={(e) => setFormData({ ...formData, reminder_date: e.target.value })}
-                  style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
-                />
-              </div>
-
-
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <label htmlFor="disc_form_complaint" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Complaint / Issue</label>
-                <textarea
-                  id="disc_form_complaint"
-                  name="disc_form_complaint"
-                  rows={3}
-                  placeholder="Enter complaint details..."
-                  value={formData.complaint}
-                  onChange={(e) => setFormData({ ...formData, complaint: e.target.value })}
-                  style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13, fontFamily: 'inherit', resize: 'vertical' }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <label htmlFor="disc_form_response" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Response / Remarks</label>
-                <textarea
-                  id="disc_form_response"
-                  name="disc_form_response"
-                  rows={3}
-                  placeholder="Enter response or action taken..."
-                  value={formData.respond}
-                  onChange={(e) => setFormData({ ...formData, respond: e.target.value })}
-                  style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13, fontFamily: 'inherit', resize: 'vertical' }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <label htmlFor="disc_form_reminder_notes" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Reminder Notes</label>
-                <textarea
-                  id="disc_form_reminder_notes"
-                  name="disc_form_reminder_notes"
-                  rows={2}
-                  placeholder="Enter reminder details or follow-up tasks..."
-                  value={formData.reminder_notes}
-                  onChange={(e) => setFormData({ ...formData, reminder_notes: e.target.value })}
-                  style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13, fontFamily: 'inherit', resize: 'vertical' }}
-                />
-              </div>
-            </div>
-
-            <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: 14, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-              <button type="button" onClick={handleCloseModal} style={btnSecondary}>Cancel</button>
-              <button type="submit" style={btnPrimary}>
-                <i className="fas fa-save" /> {editingId ? 'Update' : 'Save'}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* Confirm Dialog */}
-      {confirmDialog && (
-        <div style={overlayStyle}>
-          <div style={{ ...modalStyle, maxWidth: 400, padding: 20 }}>
-            <h3 style={{ margin: '0 0 10px', fontSize: 16, color: theme.text }}>{confirmDialog.title}</h3>
-            <p style={{ margin: '0 0 20px', color: theme.text2, fontSize: 13 }}>{confirmDialog.message}</p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-              <button onClick={confirmDialog.onCancel} style={btnSecondary}>Cancel</button>
-              <button onClick={confirmDialog.onConfirm} style={btnDanger}>Confirm</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Reminder Alert Modal */}
-      {reminderAlert && (
-        <div style={overlayStyle} onClick={() => setReminderAlert(null)}>
-          <div style={{ ...modalStyle, maxWidth: 500, padding: 22 }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <h3 style={{ margin: 0, fontSize: 16, color: theme.orange, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <i className="fas fa-exclamation-triangle" /> Reminder Alert
-              </h3>
-              <button onClick={() => setReminderAlert(null)} style={closeBtnStyle}>✕</button>
-            </div>
-            <p style={{ margin: '0 0 16px', fontSize: 13, color: theme.text2 }}>
-              You have {reminderAlert.length} discussion meeting(s) with active reminders due today or in the past:
-            </p>
-            <div style={{ maxHeight: 'calc(100vh - 350px)', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {reminderAlert.map(d => (
-                <div key={d.id} style={{ background: '#fffbeb', border: '1.5px solid #fde68a', borderRadius: 10, padding: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 13 }}>
-                    <span>{d.appointment}</span>
-                    <span style={{ color: theme.orange }}>{formatDate(d.reminder_date)}</span>
-                  </div>
-                  <div style={{ fontSize: 12, color: theme.text2, marginTop: 4 }}>File: {d.file_no} | Officer: {d.officer || '—'}</div>
-                  {d.meeting_date_time && (
-                    <div style={{ fontSize: 12, color: theme.text2, marginTop: 4 }}>Meeting: {formatDateTime(d.meeting_date_time)}</div>
-                  )}
-                  {d.reminder_notes && (
-                    <div style={{ fontSize: 12, color: theme.text, background: '#fef3c7', padding: '6px 10px', borderRadius: 6, marginTop: 6 }}>
-                      <strong>Note:</strong> {d.reminder_notes}
-                    </div>
-                  )}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 14, marginBottom: 20 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <label htmlFor="disc_form_date" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Date</label>
+                  <input
+                    id="disc_form_date"
+                    name="disc_form_date"
+                    type="date"
+                    value={formData.date}
+                    onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                    style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
+                    required
+                  />
                 </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
-              <button onClick={() => setReminderAlert(null)} style={btnPrimary}>Acknowledge</button>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <label htmlFor="disc_form_file_no" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>File No *</label>
+                  <input
+                    id="disc_form_file_no"
+                    name="disc_form_file_no"
+                    type="text"
+                    placeholder="e.g. CMA/REG/2026/001"
+                    value={formData.file_no}
+                    onChange={(e) => setFormData({ ...formData, file_no: e.target.value })}
+                    style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
+                    required
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <label htmlFor="disc_form_appointment" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Appointment / To *</label>
+                  <textarea
+                    id="disc_form_appointment"
+                    name="disc_form_appointment"
+                    placeholder="e.g. Ms. Rikaza,\nCountry Director..."
+                    value={formData.appointment}
+                    onChange={(e) => setFormData({ ...formData, appointment: e.target.value })}
+                    style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13, resize: 'vertical' }}
+                    rows={4}
+                    required
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <label htmlFor="disc_form_officer" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Officer</label>
+                  <input
+                    id="disc_form_officer"
+                    name="disc_form_officer"
+                    type="text"
+                    placeholder="e.g. A. Perera"
+                    value={formData.officer}
+                    onChange={(e) => setFormData({ ...formData, officer: e.target.value })}
+                    style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
+                  />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
+                    <label htmlFor="disc_form_meeting_date" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Meeting Date</label>
+                    <input
+                      id="disc_form_meeting_date"
+                      name="disc_form_meeting_date"
+                      type="date"
+                      value={formData.meeting_date}
+                      onChange={(e) => setFormData({ ...formData, meeting_date: e.target.value })}
+                      style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
+                    <label htmlFor="disc_form_meeting_time" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Time</label>
+                    <input
+                      id="disc_form_meeting_time"
+                      name="disc_form_meeting_time"
+                      type="time"
+                      value={formData.meeting_time}
+                      onChange={(e) => setFormData({ ...formData, meeting_time: e.target.value })}
+                      style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
+                    <label htmlFor="disc_form_meeting_ampm" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>AM / PM</label>
+                    <select
+                      id="disc_form_meeting_ampm"
+                      name="disc_form_meeting_ampm"
+                      value={formData.meeting_ampm}
+                      onChange={(e) => setFormData({ ...formData, meeting_ampm: e.target.value })}
+                      style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
+                    >
+                      <option value="AM">AM</option>
+                      <option value="PM">PM</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <label htmlFor="disc_form_venue" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Venue</label>
+                  <input
+                    id="disc_form_venue"
+                    name="disc_form_venue"
+                    type="text"
+                    placeholder="e.g. Conference Room A"
+                    value={formData.venue}
+                    onChange={(e) => setFormData({ ...formData, venue: e.target.value })}
+                    style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <label htmlFor="disc_form_reminder_date" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Reminder Date</label>
+                  <input
+                    id="disc_form_reminder_date"
+                    name="disc_form_reminder_date"
+                    type="date"
+                    value={formData.reminder_date}
+                    onChange={(e) => setFormData({ ...formData, reminder_date: e.target.value })}
+                    style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13 }}
+                  />
+                </div>
+
+
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <label htmlFor="disc_form_complaint" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Complaint / Issue</label>
+                  <textarea
+                    id="disc_form_complaint"
+                    name="disc_form_complaint"
+                    rows={3}
+                    placeholder="Enter complaint details..."
+                    value={formData.complaint}
+                    onChange={(e) => setFormData({ ...formData, complaint: e.target.value })}
+                    style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13, fontFamily: 'inherit', resize: 'vertical' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <label htmlFor="disc_form_response" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Response / Remarks</label>
+                  <textarea
+                    id="disc_form_response"
+                    name="disc_form_response"
+                    rows={3}
+                    placeholder="Enter response or action taken..."
+                    value={formData.respond}
+                    onChange={(e) => setFormData({ ...formData, respond: e.target.value })}
+                    style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13, fontFamily: 'inherit', resize: 'vertical' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <label htmlFor="disc_form_reminder_notes" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Reminder Notes</label>
+                  <textarea
+                    id="disc_form_reminder_notes"
+                    name="disc_form_reminder_notes"
+                    rows={2}
+                    placeholder="Enter reminder details or follow-up tasks..."
+                    value={formData.reminder_notes}
+                    onChange={(e) => setFormData({ ...formData, reminder_notes: e.target.value })}
+                    style={{ padding: '8px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13, fontFamily: 'inherit', resize: 'vertical' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: 14, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                <button type="button" onClick={handleCloseModal} style={btnSecondary}>Cancel</button>
+                <button type="submit" style={btnPrimary}>
+                  <i className="fas fa-save" /> {editingId ? 'Update' : 'Save'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Confirm Dialog */}
+        {confirmDialog && (
+          <div style={overlayStyle}>
+            <div style={{ ...modalStyle, maxWidth: 400, padding: 20 }}>
+              <h3 style={{ margin: '0 0 10px', fontSize: 16, color: theme.text }}>{confirmDialog.title}</h3>
+              <p style={{ margin: '0 0 20px', color: theme.text2, fontSize: 13 }}>{confirmDialog.message}</p>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                <button onClick={confirmDialog.onCancel} style={btnSecondary}>Cancel</button>
+                <button onClick={confirmDialog.onConfirm} style={btnDanger}>Confirm</button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Reminder Alert Modal */}
+        {reminderAlert && (
+          <div style={overlayStyle} onClick={() => setReminderAlert(null)}>
+            <div style={{ ...modalStyle, maxWidth: 500, padding: 22 }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <h3 style={{ margin: 0, fontSize: 16, color: theme.orange, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <i className="fas fa-exclamation-triangle" /> Reminder Alert
+                </h3>
+                <button onClick={() => setReminderAlert(null)} style={closeBtnStyle}>✕</button>
+              </div>
+              <p style={{ margin: '0 0 16px', fontSize: 13, color: theme.text2 }}>
+                You have {reminderAlert.length} discussion meeting(s) with active reminders due today or in the past:
+              </p>
+              <div style={{ maxHeight: 'calc(100vh - 350px)', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {reminderAlert.map(d => (
+                  <div key={d.id} style={{ background: '#fffbeb', border: '1.5px solid #fde68a', borderRadius: 10, padding: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 13 }}>
+                      <span>{d.appointment}</span>
+                      <span style={{ color: theme.orange }}>{formatDate(d.reminder_date)}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: theme.text2, marginTop: 4 }}>File: {d.file_no} | Officer: {d.officer || '—'}</div>
+                    {d.meeting_date_time && (
+                      <div style={{ fontSize: 12, color: theme.text2, marginTop: 4 }}>Meeting: {formatDateTime(d.meeting_date_time)}</div>
+                    )}
+                    {d.reminder_notes && (
+                      <div style={{ fontSize: 12, color: theme.text, background: '#fef3c7', padding: '6px 10px', borderRadius: 6, marginTop: 6 }}>
+                        <strong>Note:</strong> {d.reminder_notes}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
+                <button onClick={() => setReminderAlert(null)} style={btnPrimary}>Acknowledge</button>
+              </div>
+            </div>
+          </div>
+        )}
 
 
 
-      {exportModalOpen && (
-        <GenericExportModal
-          title="Export Discussions"
-          subject="Discussions"
-          exporting={exporting}
-          fields={DISCUSSIONS_EXPORT_FIELDS}
-          onExport={handleExport}
-          onClose={() => setExportModalOpen(false)}
-        />
-      )}
-
-      {/* Toast Alert */}
-      {toast && (
-        <div style={{
-          position: 'fixed',
-          bottom: 22,
-          right: 22,
-          zIndex: 9999,
-          background: '#fff',
-          border: `1.5px solid ${theme.border}`,
-          borderLeft: `4px solid ${toast.type === 'error' ? theme.red : theme.green}`,
-          borderRadius: 10,
-          padding: '12px 16px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          boxShadow: '0 8px 30px rgba(0,0,0,.12)',
-          minWidth: 240
-        }}>
-          <i
-            className={`fas fa-${toast.type === 'error' ? 'times-circle' : 'check-circle'}`}
-            style={{ color: toast.type === 'error' ? theme.red : theme.green, fontSize: 15 }}
+        {exportModalOpen && (
+          <GenericExportModal
+            title="Export Discussions"
+            subject="Discussions"
+            exporting={exporting}
+            fields={DISCUSSIONS_EXPORT_FIELDS}
+            onExport={handleExport}
+            onClose={() => setExportModalOpen(false)}
           />
-          <span style={{ fontSize: 13, fontWeight: 700, color: theme.text }}>{toast.msg}</span>
-        </div>
-      )}
+        )}
+
+        {/* Importing Overlay */}
+        {isImporting && (
+          <div style={{
+            position: 'fixed', inset: 0, zIndex: 10000,
+            background: 'rgba(255,255,255,0.82)', backdropFilter: 'blur(6px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <div style={{
+              background: '#fff', borderRadius: 18, boxShadow: '0 8px 40px rgba(26,58,107,0.18)',
+              padding: '40px 52px', display: 'flex', flexDirection: 'column',
+              alignItems: 'center', gap: 18, minWidth: 280,
+            }}>
+              <div style={{
+                width: 56, height: 56, borderRadius: '50%',
+                border: '5px solid #e2e8f0', borderTopColor: theme.navy,
+                animation: 'cma-spin 0.85s linear infinite',
+              }} />
+              <div style={{ fontSize: 17, fontWeight: 700, color: theme.text, letterSpacing: 0.1 }}>Importing Data...</div>
+              <div style={{ fontSize: 13, color: theme.text2, marginTop: -6 }}>Please wait while the records are being processed.</div>
+              <div style={{ width: '100%', height: 4, background: '#e2e8f0', borderRadius: 4, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', width: '40%',
+                  background: `linear-gradient(90deg, ${theme.navy}, #2563eb)`,
+                  borderRadius: 4,
+                  animation: 'cma-progress 1.4s ease-in-out infinite',
+                }} />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Toast Alert */}
+        {toast && (
+          <div style={{
+            position: 'fixed',
+            bottom: 22,
+            right: 22,
+            zIndex: 9999,
+            background: '#fff',
+            border: `1.5px solid ${theme.border}`,
+            borderLeft: `4px solid ${toast.type === 'error' ? theme.red : theme.green}`,
+            borderRadius: 10,
+            padding: '12px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            boxShadow: '0 8px 30px rgba(0,0,0,.12)',
+            minWidth: 240
+          }}>
+            <i
+              className={`fas fa-${toast.type === 'error' ? 'times-circle' : 'check-circle'}`}
+              style={{ color: toast.type === 'error' ? theme.red : theme.green, fontSize: 15 }}
+            />
+            <span style={{ fontSize: 13, fontWeight: 700, color: theme.text }}>{toast.msg}</span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

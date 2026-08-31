@@ -14,7 +14,8 @@ module.exports = (sequelize, DataTypes) => {
     years: { type: DataTypes.TEXT },
     amount: { type: DataTypes.REAL },
     reject_reason: { type: DataTypes.TEXT },
-    approved_at: { type: DataTypes.DATE }
+    approved_at: { type: DataTypes.DATE },
+    action_by: { type: DataTypes.TEXT }
   }, {
     tableName: 'renewals',
     timestamps: true,

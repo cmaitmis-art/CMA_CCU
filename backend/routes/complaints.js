@@ -15,7 +15,7 @@ const complaintAttributes = [
   'id', 'serial_no', 'letter_date', 'received_ccu', 'mc_no',
   'apartment_name', 'complaint_name', 'issue_heading',
   'file_marked', 'tr_marked', 'reply_marked', 'remarks',
-  'category', 'status', 'created_by', 'modified_by', 'history',
+  'category', 'status', 'assigned_department', 'created_by', 'modified_by', 'history',
   'created_at', 'updated_at', 'document_path', 'document_name',
 ];
 
@@ -31,22 +31,39 @@ const addDaysPending = (complaint) => {
 
 // GET /api/complaints
 router.get('/', async (req, res) => {
-  const { status, category, q, year, month, pending_overdue_15, page = 1, limit = 20, sort = 'desc' } = req.query;
+  const { status, category, q, year, month, pending_overdue_15, department, exclude_closed, page = 1, limit = 20, sort = 'desc' } = req.query;
   const offset = (page - 1) * limit;
 
   try {
     const where = {};
+    const andConditions = [];
     if (status) where.status = status;
+    if (exclude_closed === 'true') where.status = { [Op.ne]: 'Closed' };
     if (category) where.category = category;
+    
+    if (department) {
+      andConditions.push({
+        [Op.or]: [
+          { assigned_department: department },
+          { status: { [Op.like]: `%${department}%` } }
+        ]
+      });
+    }
 
     if (q) {
-      where[Op.or] = [
-        { serial_no: { [Op.like]: `%${q}%` } },
-        { mc_no: { [Op.like]: `%${q}%` } },
-        { apartment_name: { [Op.like]: `%${q}%` } },
-        { complaint_name: { [Op.like]: `%${q}%` } },
-        { issue_heading: { [Op.like]: `%${q}%` } },
-      ];
+      andConditions.push({
+        [Op.or]: [
+          { serial_no: { [Op.like]: `%${q}%` } },
+          { mc_no: { [Op.like]: `%${q}%` } },
+          { apartment_name: { [Op.like]: `%${q}%` } },
+          { complaint_name: { [Op.like]: `%${q}%` } },
+          { issue_heading: { [Op.like]: `%${q}%` } },
+        ]
+      });
+    }
+
+    if (andConditions.length > 0) {
+      where[Op.and] = andConditions;
     }
 
     if (month) {
@@ -100,6 +117,16 @@ router.post('/bulk', async (req, res) => {
   if (!Array.isArray(req.body)) return res.status(400).json({ error: 'Expected array of complaints' });
   try {
     await Complaint.bulkCreate(req.body, { validate: true });
+    
+    if (db.models.SystemLog) {
+      const user = req.body[0]?.user_name || req.body[0]?.created_by || 'System';
+      await db.models.SystemLog.create({
+        user_name: user,
+        action: 'Bulk Imported Complaints',
+        details: `Imported ${req.body.length} new complaint records`
+      });
+    }
+
     res.status(201).json({ message: 'Imported successfully' });
   } catch (err) {
     console.error('POST /complaints/bulk error:', err.message);
@@ -341,6 +368,90 @@ router.delete('/:id/document', async (req, res) => {
   } catch (err) {
     console.error('DELETE /api/complaints/:id/document error:', err.message);
     res.status(500).json({ error: 'Failed to remove document' });
+  }
+});
+
+// ── PUT /api/complaints/:id/transfer ─ Transfer Complaint to a department ─────────
+router.put('/:id/transfer', async (req, res) => {
+  try {
+    const { assigned_department, user_name, from_department } = req.body;
+    const complaint = await Complaint.findByPk(req.params.id);
+    if (!complaint) return res.status(404).json({ error: 'Complaint not found' });
+
+    const isReturnToCCU = assigned_department === 'CCU';
+    const newStatus = isReturnToCCU ? 'Pending' : 'Transferred';
+    const newDept = isReturnToCCU ? null : assigned_department;
+
+    let history = [];
+    try { history = complaint.history ? JSON.parse(complaint.history) : []; } catch (e) {}
+    history.push({
+      name: user_name || 'System',
+      action: isReturnToCCU ? 'Returned to CCU' : 'Transferred',
+      from_department: from_department || 'ADMIN',
+      time: new Date().toISOString(),
+      note: isReturnToCCU ? 'Returned to CCU (Admin)' : `Transferred to ${assigned_department}`
+    });
+
+    await complaint.update({
+      status: newStatus,
+      assigned_department: newDept,
+      history: JSON.stringify(history)
+    });
+
+    res.json(complaint);
+  } catch (err) {
+    console.error('PUT /complaints/:id/transfer error:', err.message);
+    res.status(500).json({ error: 'Failed to transfer Complaint' });
+  }
+});
+
+// ── PUT /api/complaints/:id/close ─ Close Complaint with reason and document ─────────
+router.put('/:id/close', async (req, res) => {
+  try {
+    const { closed_reason, closed_department, user_name } = req.body;
+    const complaint = await Complaint.findByPk(req.params.id);
+    if (!complaint) return res.status(404).json({ error: 'Complaint not found' });
+
+    let document_path = complaint.closed_document_path;
+    let document_name = complaint.closed_document_name;
+
+    if (req.files && req.files.document) {
+      const file = req.files.document;
+      const path = require('path');
+      const fs = require('fs');
+      const ext = path.extname(file.name).toLowerCase();
+      const finalName = `COMPLAINT_CLOSED_${complaint.id}_${Date.now()}${ext}`;
+      const uploadsDir = path.join(__dirname, '../uploads/complaints');
+      await fs.promises.mkdir(uploadsDir, { recursive: true });
+      const absolutePath = path.join(uploadsDir, finalName);
+      await fs.promises.writeFile(absolutePath, file.data);
+      document_path = `uploads/complaints/${finalName}`;
+      document_name = file.name;
+    }
+
+    let history = [];
+    try { history = complaint.history ? JSON.parse(complaint.history) : []; } catch (e) {}
+    history.push({
+      name: user_name || 'System',
+      action: 'Closed',
+      time: new Date().toISOString(),
+      note: `Closed with reason: ${closed_reason}`
+    });
+
+    await complaint.update({
+      status: 'Closed',
+      closed_by: user_name,
+      closed_department,
+      closed_reason,
+      closed_document_path: document_path,
+      closed_document_name: document_name,
+      history: JSON.stringify(history)
+    });
+
+    res.json(complaint);
+  } catch (err) {
+    console.error('PUT /complaints/:id/close error:', err.message);
+    res.status(500).json({ error: 'Failed to close Complaint' });
   }
 });
 

@@ -43,7 +43,7 @@ const WRITABLE_COLS = [
   'created_by', 'modified_by',
 
   // Renewal payment / acknowledgement fields
-  'renewal_paid', 'renewal_paid_date', 'renewal_paid_amount', 'renewal_paid_year',
+  'renewal_paid', 'renewal_paid_date', 'renewal_paid_amount', 'renewal_paid_year', 'renewal_paid_years',
   'renewal_receipt_no', 'acknowledgement_no', 'acknowledgement_date', 'renewal_payment_status', 'next_renewal_date'
 ];
 
@@ -93,54 +93,52 @@ function resolveFileNo(body, data) {
 // Query params: ?q=search &status=Active &year=2024 &category=A &page=1 &limit=20
 router.get('/', async (req, res) => {
   try {
-    const { q, searchField, status, year, month, category, mc_mcom, page = 1, limit = 20 } = req.query;
+    const { q, searchField, status, year, month, category, mc_mcom, renewalPeriod, agmYear, page = 1, limit = 20 } = req.query;
     const offset = (Math.max(1, Number(page)) - 1) * Math.max(1, Number(limit));
 
     const where = {};
     const andConditions = [];
 
     // SQLite's LIKE is already case-insensitive for ASCII letters.
+    let cleanQ = q;
     if (q) {
+      // If user types "MCOM-1092" based on placeholder, strip "MCOM-" to search effectively
+      cleanQ = q.replace(/^MCOM\s*-?\s*/i, '').replace(/^MC\s*-?\s*/i, '');
+      
       if (searchField === 'planNo') {
         andConditions.push({
           $or: [
-            { file_no: { $like: `%${q}%` } },
-            { new_file_no: { $like: `%${q}%` } },
-            { old_file_no: { $like: `%${q}%` } },
-            { plan_no: { $like: `%${q}%` } },
+            { plan_no: { $like: `%${cleanQ}%` } },
           ]
         });
       } else if (searchField === 'name') {
         andConditions.push({
           $or: [
-            { management_corporation_name: { $like: `%${q}%` } },
+            { management_corporation_name: { $like: `%${cleanQ}%` } },
           ]
         });
       } else if (searchField === 'planOrName') {
         andConditions.push({
           $or: [
-            { file_no: { $like: `%${q}%` } },
-            { new_file_no: { $like: `%${q}%` } },
-            { old_file_no: { $like: `%${q}%` } },
-            { plan_no: { $like: `%${q}%` } },
-            { management_corporation_name: { $like: `%${q}%` } },
+            { plan_no: { $like: `%${cleanQ}%` } },
+            { management_corporation_name: { $like: `%${cleanQ}%` } },
           ]
         });
       } else {
         andConditions.push({
           $or: [
-            { file_no: { $like: `%${q}%` } },
-            { new_file_no: { $like: `%${q}%` } },
-            { old_file_no: { $like: `%${q}%` } },
-            { plan_no: { $like: `%${q}%` } },
-            { management_corporation_name: { $like: `%${q}%` } },
-            { address: { $like: `%${q}%` } },
-            { secretary: { $like: `%${q}%` } },
-            { treasurer: { $like: `%${q}%` } },
-            { town: { $like: `%${q}%` } },
-            { remark: { $like: `%${q}%` } },
-            { certificate_file_no: { $like: `%${q}%` } },
-            { email_address: { $like: `%${q}%` } },
+            { file_no: { $like: `%${cleanQ}%` } },
+            { new_file_no: { $like: `%${cleanQ}%` } },
+            { old_file_no: { $like: `%${cleanQ}%` } },
+            { plan_no: { $like: `%${cleanQ}%` } },
+            { management_corporation_name: { $like: `%${cleanQ}%` } },
+            { address: { $like: `%${cleanQ}%` } },
+            { secretary: { $like: `%${cleanQ}%` } },
+            { treasurer: { $like: `%${cleanQ}%` } },
+            { town: { $like: `%${cleanQ}%` } },
+            { remark: { $like: `%${cleanQ}%` } },
+            { certificate_file_no: { $like: `%${cleanQ}%` } },
+            { email_address: { $like: `%${cleanQ}%` } },
           ]
         });
       }
@@ -157,6 +155,16 @@ router.get('/', async (req, res) => {
       }
     } else if (year) {
       andConditions.push({ year: Number(year) });
+    }
+
+    if (renewalPeriod) andConditions.push({ renewal_period: { $like: `%${renewalPeriod}%` } });
+    if (agmYear) {
+      andConditions.push({
+        $or: [
+          { agm_date: { $like: `%${agmYear}%` } },
+          { agm_date_vise: { $like: `%${agmYear}%` } }
+        ]
+      });
     }
 
     const catVal = category || mc_mcom;
@@ -244,6 +252,22 @@ router.post('/', async (req, res) => {
     }]);
 
     const record = await McomRecord.create(data);
+
+    // -- CUSTOMER HISTORY LOG --
+    try {
+      await db.models.CustomerHistory.create({
+        customer_no: data.file_no,
+        mc_type: 'MCOM',
+        action_type: 'Registration',
+        description: `MCOM Registered: ${data.management_corporation_name || ''}`,
+        year: new Date().getFullYear(),
+        file_path: null,
+        action_by: user_name
+      });
+    } catch (histErr) {
+      console.error('Failed to log CustomerHistory on MCOM creation:', histErr);
+    }
+
     res.status(201).json(record.toJSON());
   } catch (err) {
     console.error('POST /mcom error:', err);
@@ -389,23 +413,44 @@ router.post('/bulk', async (req, res) => {
       data.file_no = file_no;
 
       // Upsert: create if new, update if exists
+      const importUser = data.user_name || data.created_by || 'Bulk Import';
       const [instance, created] = await McomRecord.findOrCreate({
         where: { file_no: data.file_no },
-        defaults: data,
+        defaults: {
+          ...data,
+          history: JSON.stringify([{
+            name: importUser,
+            action: 'Bulk Added',
+            time: new Date().toISOString()
+          }]),
+        },
         transaction,
+        skipActivityLog: true
       });
 
       if (created) {
         inserted++;
       } else {
-        const merged = mergeImportPayload(instance.toJSON ? instance.toJSON() : instance, data, { importUser: data.modified_by || data.user_name || 'Bulk Import Update' });
-        merged.modified_by = data.modified_by || data.user_name || 'Bulk Import Update';
-        await instance.update(merged, { transaction });
+        const modified_by = data.modified_by || data.user_name || 'Bulk Import Update';
+        const merged = mergeImportPayload(instance.toJSON ? instance.toJSON() : instance, data, { importUser: modified_by, importAction: 'Bulk Updated' });
+        merged.modified_by = modified_by;
+        await instance.update(merged, { transaction, skipActivityLog: true });
         updated++;
       }
     }
 
     await transaction.commit();
+
+    if ((inserted > 0 || updated > 0) && db.models.SystemLog) {
+      // Find a username from the first inserted record or query params, default to 'System'
+      const user = records[0]?.user_name || records[0]?.created_by || req.query.user_name || req.body.user_name || 'System';
+      await db.models.SystemLog.create({
+        user_name: user,
+        action: 'Imported M.Com Records',
+        details: `Imported ${inserted} new records and updated ${updated} existing records`
+      });
+    }
+
     res.json({ success: true, inserted, updated });
   } catch (err) {
     // Roll back everything if any record fails
@@ -423,7 +468,10 @@ router.post('/bulk-delete', async (req, res) => {
   }
 
   try {
-    const deleted = await McomRecord.destroy({ where: { file_no: file_nos } });
+    const deleted = await McomRecord.destroy({ 
+      where: { file_no: file_nos },
+      skipActivityLog: true
+    });
 
     if (deleted > 0 && db.models.SystemLog) {
       const user = req.body.user_name || req.query.user_name || 'System';

@@ -33,9 +33,22 @@ const { Cfile } = db.models;
 //   ?page=1&limit=100     → pagination
 router.get('/', async (req, res) => {
   try {
-    const { category, status, q, reason, limit = 100, page = 1, pending_overdue_15, year, month } = req.query;
+    const { category, status, q, reason, limit = 100, page = 1, pending_overdue_15, year, month, department, exclude_closed } = req.query;
     const where = {};
     const andConditions = [];
+
+    if (exclude_closed === 'true') {
+      where.status = { [Op.ne]: 'Closed' };
+    }
+
+    if (department) {
+      andConditions.push({
+        [Op.or]: [
+          { assigned_department: department },
+          { status: { [Op.like]: `%${department}%` } }
+        ]
+      });
+    }
 
     if (pending_overdue_15 === 'true') {
       const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
@@ -179,7 +192,7 @@ router.post('/', async (req, res) => {
     });
 
     // Create a SQL backup after successful write
-    await backupAfter(db);
+    await backupAfter();
     res.status(201).json(cfile);
   } catch (err) {
     console.error('POST /cfiles error:', err.message);
@@ -216,7 +229,7 @@ router.post('/bulk', async (req, res) => {
             ...rec,
             history: JSON.stringify([{
               name: importUser,
-              action: 'Added',
+              action: 'Bulk Added',
               time: new Date().toISOString()
             }])
           },
@@ -472,6 +485,88 @@ router.delete('/:id/document', async (req, res) => {
   } catch (err) {
     console.error('DELETE /api/cfiles/:id/document error:', err.message);
     res.status(500).json({ error: 'Failed to remove document' });
+  }
+});
+
+// ── PUT /api/cfiles/:id/transfer ─ Transfer C-file to a department ─────────
+router.put('/:id/transfer', async (req, res) => {
+  try {
+    const { assigned_department, user_name, from_department } = req.body;
+    const cfile = await Cfile.findByPk(req.params.id);
+    if (!cfile) return res.status(404).json({ error: 'C file not found' });
+
+    const isReturnToCCU = assigned_department === 'CCU';
+    const newStatus = isReturnToCCU ? 'Pending' : 'Transferred';
+    const newDept = isReturnToCCU ? null : assigned_department;
+
+    let history = [];
+    try { history = cfile.history ? JSON.parse(cfile.history) : []; } catch (e) {}
+    history.push({
+      name: user_name || 'System',
+      action: isReturnToCCU ? 'Returned to CCU' : 'Transferred',
+      from_department: from_department || 'ADMIN',
+      time: new Date().toISOString(),
+      note: isReturnToCCU ? 'Returned to CCU (Admin)' : `Transferred to ${assigned_department}`
+    });
+
+    await cfile.update({
+      status: newStatus,
+      assigned_department: newDept,
+      history: JSON.stringify(history)
+    });
+
+    res.json(cfile);
+  } catch (err) {
+    console.error('PUT /cfiles/:id/transfer error:', err.message);
+    res.status(500).json({ error: 'Failed to transfer C file' });
+  }
+});
+
+// ── PUT /api/cfiles/:id/close ─ Close C-file with reason and document ─────────
+router.put('/:id/close', async (req, res) => {
+  try {
+    const { closed_reason, closed_department, user_name } = req.body;
+    const cfile = await Cfile.findByPk(req.params.id);
+    if (!cfile) return res.status(404).json({ error: 'C file not found' });
+
+    let document_path = cfile.closed_document_path;
+    let document_name = cfile.closed_document_name;
+
+    if (req.files && req.files.document) {
+      const file = req.files.document;
+      const ext = path.extname(file.name).toLowerCase();
+      const finalName = `CFILE_CLOSED_${cfile.id}_${Date.now()}${ext}`;
+      const uploadsDir = path.join(__dirname, '../uploads/cfiles');
+      await fs.promises.mkdir(uploadsDir, { recursive: true });
+      const absolutePath = path.join(uploadsDir, finalName);
+      await fs.promises.writeFile(absolutePath, file.data);
+      document_path = `uploads/cfiles/${finalName}`;
+      document_name = file.name;
+    }
+
+    let history = [];
+    try { history = cfile.history ? JSON.parse(cfile.history) : []; } catch (e) {}
+    history.push({
+      name: user_name || 'System',
+      action: 'Closed',
+      time: new Date().toISOString(),
+      note: `Closed with reason: ${closed_reason}`
+    });
+
+    await cfile.update({
+      status: 'Closed',
+      closed_by: user_name,
+      closed_department,
+      closed_reason,
+      closed_document_path: document_path,
+      closed_document_name: document_name,
+      history: JSON.stringify(history)
+    });
+
+    res.json(cfile);
+  } catch (err) {
+    console.error('PUT /cfiles/:id/close error:', err.message);
+    res.status(500).json({ error: 'Failed to close C file' });
   }
 });
 

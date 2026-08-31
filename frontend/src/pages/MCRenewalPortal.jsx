@@ -143,10 +143,15 @@ const money = (n) =>
 
 import {
   fetchMCs,
+  fetchMCById,
   fetchMComs,
-  submitRenewal,
-  fetchRenewal,
   fetchRenewals,
+  fetchRenewal,
+  submitRenewal,
+  approveRenewal,
+  fetchUserDraft,
+  setUserDraft,
+  deleteUserDraft,
 } from "../api.js";
 import { useSettings } from "../SettingsContext.jsx";
 import { CMA_LOGO_BASE64 } from "../utils/logoBase64.js";
@@ -549,6 +554,7 @@ export default function MCRenewalPortal({
 
   // ---- Step 2: applicant details (Moved from Step 1) ---------------------
   const blankApplicant = {
+    title: "",
     firstName: "",
     lastName: "",
     nic: "",
@@ -574,17 +580,48 @@ export default function MCRenewalPortal({
     }
     return { ...blankApplicant, firstName: fName, lastName: lName, email };
   });
-  const [touched, setTouched] = useState(false);
+  const [errors, setErrors] = useState({});
 
-  const requiredOk =
-    applicant.firstName.trim() &&
-    applicant.lastName.trim() &&
-    applicant.phone.trim() &&
-    applicant.addr1.trim() &&
-    applicant.province &&
-    applicant.district &&
-    applicant.city.trim() &&
-    applicant.postalCode.trim();
+  function validateApplicant() {
+    const newErrors = {};
+    if (!applicant.title) newErrors.title = "Title is required";
+    if (!applicant.firstName.trim()) newErrors.firstName = "First Name is required";
+    if (!applicant.lastName.trim()) newErrors.lastName = "Last Name is required";
+
+    const phoneRegex = /^(?:0|(?:\+94))[0-9]{9}$/;
+    const phoneVal = applicant.phone.trim().replace(/[\s-]/g, '');
+    if (!applicant.phone.trim()) {
+      newErrors.phone = "Telephone No is required";
+    } else if (!phoneRegex.test(phoneVal)) {
+      newErrors.phone = "Invalid Telephone No (e.g. 0712345678 or +94712345678)";
+    }
+
+    if (!applicant.nic.trim()) {
+      newErrors.nic = "NIC No is required";
+    } else {
+      const nicRegexOld = /^[0-9]{9}[vVxX]$/;
+      const nicRegexNew = /^[0-9]{12}$/;
+      const nicVal = applicant.nic.trim();
+      if (!nicRegexOld.test(nicVal) && !nicRegexNew.test(nicVal)) {
+        newErrors.nic = "Invalid NIC No (e.g. 123456789V or 199012345678)";
+      }
+    }
+
+    if (applicant.email.trim()) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(applicant.email.trim())) {
+        newErrors.email = "Invalid Email format";
+      }
+    }
+
+    if (!applicant.addr1.trim()) newErrors.addr1 = "Address Line 1 is required";
+    if (!applicant.province) newErrors.province = "Province is required";
+    if (!applicant.district) newErrors.district = "District is required";
+    if (!applicant.city.trim()) newErrors.city = "City is required";
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  }
 
   const setA = (k, v) =>
     setApplicant((prev) => {
@@ -610,9 +647,9 @@ export default function MCRenewalPortal({
       );
       setDashboardRenewals(myRenewals);
 
-      const savedDraft = localStorage.getItem("cma_draft_" + userIdentifier);
+      const savedDraft = await fetchUserDraft(userIdentifier, "cma_draft");
       if (savedDraft) {
-        setDraft(JSON.parse(savedDraft));
+        setDraft(typeof savedDraft === 'string' ? JSON.parse(savedDraft) : savedDraft);
       } else {
         setDraft(null);
       }
@@ -660,9 +697,21 @@ export default function MCRenewalPortal({
     }
   }
 
+  function handleExitApp() {
+    if (activeUser) {
+      if (typeof onNavigate === "function") {
+        onNavigate("dashboard");
+      } else {
+        window.location.href = "/";
+      }
+    } else {
+      window.location.href = "https://www.condominium.lk/";
+    }
+  }
+
   function quitToDashboard() {
     if (standalone) {
-      window.location.href = "/";
+      handleExitApp();
     } else {
       setPortalView("dashboard");
       loadDashboard();
@@ -722,10 +771,10 @@ export default function MCRenewalPortal({
 
   // ---- Step 3: renewal timeline / year selection --------------------------
   const dueRows = useMemo(
-    () => (selectedMC 
+    () => (selectedMC
       ? selectedMC.type === "M.Com"
         ? buildMcomMultiYearRows(selectedMC, settings)
-        : buildMultiYearRenewalRows(selectedMC, settings) 
+        : buildMultiYearRenewalRows(selectedMC, settings)
       : []),
     [selectedMC, settings],
   );
@@ -844,17 +893,24 @@ export default function MCRenewalPortal({
     return () => clearInterval(pollRef.current);
   }, [step, renewalRecord]);
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
   async function refreshStatusNow() {
     if (!renewalRecord) return;
-    const latest = await renewalApi.checkStatus(renewalRecord.ref_no);
-    if (latest) {
-      setRenewalRecord(latest);
-      if (latest.status === "active") setStep(6);
+    setIsRefreshing(true);
+    try {
+      const latest = await renewalApi.checkStatus(renewalRecord.ref_no);
+      if (latest) {
+        setRenewalRecord(latest);
+        if (latest.status === "active") setStep(6);
+      }
+    } finally {
+      setTimeout(() => setIsRefreshing(false), 800); // Give small delay for UI feedback
     }
   }
 
   // ---- Step 6: download receipt -------------------------------------------
-  function downloadReceipt(record) {
+  async function downloadReceipt(record) {
     const r = record ||
       renewalRecord ||
       (dashboardRenewals && dashboardRenewals[0]) || { years: [] };
@@ -864,6 +920,26 @@ export default function MCRenewalPortal({
     // an older one picked from the "My Renewals" table (in which case we
     // fall back to whatever the saved record itself carries).
     const isCurrentFlow = r === renewalRecord;
+
+    let mcUnits = isCurrentFlow ? (selectedMC?.units ?? selectedMC?.residential_units) : undefined;
+    let category = (isCurrentFlow && selectedMC?.category) || r.category || "-";
+    let fileNo = (isCurrentFlow && (selectedMC?.file_no || selectedMC?.new_file_no || selectedMC?.planNo)) || r.file_no || r.new_file_no || r.plan_no || "-";
+
+    // Fetch MC details if not in current flow (e.g. clicked from dashboard)
+    if (!isCurrentFlow && r.mc_id) {
+      try {
+        const fetchedData = r.mc_type === 'M.Com'
+          ? await fetchMComById(r.mc_id)
+          : await fetchMCById(r.mc_id);
+        if (fetchedData) {
+          mcUnits = fetchedData.units ?? fetchedData.residential_units;
+          category = fetchedData.category || "-";
+          fileNo = fetchedData.file_no || fetchedData.new_file_no || fetchedData.old_file_no || fetchedData.plan_no || "-";
+        }
+      } catch (err) {
+        console.error("Failed to fetch MC details for receipt:", err);
+      }
+    }
 
     // Calculate taxes back from total
     const feeRs = r.amount / 1.2095;
@@ -877,20 +953,17 @@ export default function MCRenewalPortal({
     const address = isCurrentFlow && applicant
       ? `${applicant.addr1 || ""} ${applicant.addr2 || ""}, ${applicant.city || ""}`
       : r.applicant_address || r.address || "";
-    
-    const mcUnits = isCurrentFlow ? (selectedMC?.units ?? selectedMC?.residential_units) : undefined;
+
     const rUnits = r.units ?? r.residential_units;
     const units = mcUnits ?? rUnits ?? "N/A";
 
-    const category =
-      (isCurrentFlow && selectedMC?.category) || r.category || "-";
-
-    const fileNo = (isCurrentFlow && (selectedMC?.file_no || selectedMC?.new_file_no || selectedMC?.planNo)) || r.file_no || r.new_file_no || r.plan_no || "-";
     const mcName = r.mc_name || (isCurrentFlow ? selectedMC?.name : "");
     const addressLine = [mcName, fileNo, address].filter(Boolean).join(" | ");
 
     const htmlString = `
-      <html><head><title>Renewal Receipt - ${r.ref_no || ""}</title>
+      <html><head>
+      <meta charset="UTF-8">
+      <title>Renewal Receipt - ${r.ref_no || ""}</title>
       <style>
         @page { margin: 20px; size: A4 portrait; }
         body { font-family: "Times New Roman", Times, serif; color: #000; margin: 0 auto; padding: 40px; max-width: 800px; background: #fff; line-height: 1.5; font-size: 14px; }
@@ -1019,17 +1092,18 @@ export default function MCRenewalPortal({
   useEffect(() => {
     if (portalView === "wizard" && currentUser) {
       if (step < 5) {
-        localStorage.setItem(
-          "cma_draft_" + currentUser.username,
-          JSON.stringify({
+        setUserDraft(
+          currentUser.username,
+          "cma_draft",
+          {
             step,
             applicant,
             selectedMC,
             selectedYears,
-          }),
+          }
         );
       } else {
-        localStorage.removeItem("cma_draft_" + currentUser.username);
+        deleteUserDraft(currentUser.username, "cma_draft");
       }
     }
   }, [step, applicant, selectedMC, selectedYears, portalView, activeUser]);
@@ -1142,18 +1216,26 @@ export default function MCRenewalPortal({
                 <button type="button" style={pillBtn(true)} onClick={startNew}>
                   + New Renewal
                 </button>
+                <button type="button" style={pillBtn(false)} onClick={handleExitApp}>
+                  Exit
+                </button>
               </div>
             </div>
 
             {loadingDashboard ? (
               <div
                 style={{
-                  padding: "40px 0",
+                  padding: "60px 0",
                   textAlign: "center",
                   color: theme.text3,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 12
                 }}
               >
-                Loading...
+                <i className="fas fa-spinner fa-spin" style={{ fontSize: 32, color: theme.maroon }}></i>
+                <div style={{ fontSize: 14, fontWeight: 600, color: theme.text2 }}>Loading your renewals...</div>
               </div>
             ) : (
               <div
@@ -1226,7 +1308,7 @@ export default function MCRenewalPortal({
                       </th>
                       <th
                         style={{
-                          textAlign: "right",
+                          textAlign: "left",
                           padding: "12px 16px",
                           color: theme.text2,
                           fontSize: 11.5,
@@ -1292,7 +1374,7 @@ export default function MCRenewalPortal({
                         <td
                           style={{
                             padding: "12px 16px",
-                            textAlign: "right",
+                            textAlign: "left",
                             fontFamily: fontMono,
                           }}
                         >
@@ -1367,7 +1449,13 @@ export default function MCRenewalPortal({
                       return filtered.map((r) => (
                         <tr
                           key={r.ref_no}
-                          style={{ borderBottom: `1px solid ${theme.border}` }}
+                          onClick={() => {
+                            setRenewalRecord(r);
+                            setStep(r.status === "active" ? 6 : 5);
+                          }}
+                          style={{ borderBottom: `1px solid ${theme.border}`, cursor: "pointer" }}
+                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#f8fafc")}
+                          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
                         >
                           <td style={{ padding: "12px 16px" }}>
                             <span
@@ -1386,11 +1474,16 @@ export default function MCRenewalPortal({
                                 background:
                                   r.status === "active"
                                     ? theme.greenBg
-                                    : theme.amberBg,
+                                    : r.status === "rejected"
+                                      ? "#fef2f2"
+                                      : theme.amberBg,
                                 color:
                                   r.status === "active"
                                     ? theme.green
-                                    : "#8a6d00",
+                                    : r.status === "rejected"
+                                      ? "#b91c1c"
+                                      : "#8a6d00",
+                                border: r.status === "rejected" ? "1px solid #fca5a5" : "none",
                                 padding: "4px 10px",
                                 borderRadius: 999,
                                 fontSize: 11,
@@ -1398,10 +1491,12 @@ export default function MCRenewalPortal({
                               }}
                             >
                               {r.status === "active"
-                                ? "Active"
+                                ? "✓ Active"
                                 : r.status === "pending_approval"
-                                  ? "Pending Approval"
-                                  : r.status}
+                                  ? "⏳ Pending Approval"
+                                  : r.status === "rejected"
+                                    ? "✕ Rejected"
+                                    : r.status}
                             </span>
                           </td>
                           <td style={{ padding: "12px 16px" }}>
@@ -1416,13 +1511,31 @@ export default function MCRenewalPortal({
                             <div style={{ fontSize: 11.5, color: theme.text3 }}>
                               Years: {r.years?.join(", ")}
                             </div>
+                            {r.status === "rejected" && r.reject_reason && (
+                              <div style={{
+                                marginTop: 4,
+                                fontSize: 11,
+                                color: "#b91c1c",
+                                background: "#fef2f2",
+                                border: "1px solid #fca5a5",
+                                borderRadius: 4,
+                                padding: "3px 7px",
+                                display: "inline-block",
+                                maxWidth: 260,
+                                wordBreak: "break-word",
+                              }}>
+                                <i className="fas fa-exclamation-circle" style={{ marginRight: 4 }} />
+                                Reason: {r.reject_reason}
+                              </div>
+                            )}
                           </td>
                           <td
                             style={{
                               padding: "12px 16px",
-                              textAlign: "right",
+                              textAlign: "left",
                               fontFamily: fontMono,
                               fontWeight: 600,
+                              whiteSpace: "nowrap",
                             }}
                           >
                             {money(r.amount)}
@@ -1436,7 +1549,7 @@ export default function MCRenewalPortal({
                             {r.status === "active" ? (
                               <button
                                 type="button"
-                                onClick={() => downloadReceipt(r)}
+                                onClick={(e) => { e.stopPropagation(); downloadReceipt(r); }}
                                 title="Download receipt for this renewal"
                                 style={{
                                   display: "inline-flex",
@@ -1445,21 +1558,63 @@ export default function MCRenewalPortal({
                                   background: theme.greenBg,
                                   border: `1px solid ${theme.green}`,
                                   color: theme.green,
-                                  padding: "5px 12px",
+                                  padding: "4px 10px",
                                   borderRadius: 999,
-                                  fontSize: 11.5,
+                                  fontSize: 11,
                                   fontWeight: 700,
                                   cursor: "pointer",
+                                  whiteSpace: "nowrap",
                                 }}
                               >
                                 ⬇ Download
                               </button>
-                            ) : (
-                              <span
-                                style={{ color: "#8a6d00", fontSize: 12, fontWeight: 600 }}
+                            ) : r.status === "rejected" ? (
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); startNew(); }}
+                                title="Submit a new payment for this renewal"
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                  background: "#fef2f2",
+                                  border: "1px solid #b91c1c",
+                                  color: "#b91c1c",
+                                  padding: "4px 10px",
+                                  borderRadius: 999,
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  cursor: "pointer",
+                                  whiteSpace: "nowrap",
+                                }}
                               >
-                                Pending
-                              </span>
+                                Try Again
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setRenewalRecord(r);
+                                  setStep(r.status === "active" ? 6 : 5);
+                                }}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                  background: "transparent",
+                                  border: `1px solid ${theme.gold}`,
+                                  color: "#8a6d00",
+                                  padding: "4px 10px",
+                                  borderRadius: 999,
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  cursor: "pointer",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                <i className="fas fa-eye"></i> Details
+                              </button>
                             )}
                           </td>
                         </tr>
@@ -1505,7 +1660,7 @@ export default function MCRenewalPortal({
                   </button>
                 ) : (
                   <button
-                    onClick={() => (window.location.href = "/")}
+                    onClick={handleExitApp}
                     style={{
                       background: "none",
                       border: "none",
@@ -1741,12 +1896,13 @@ export default function MCRenewalPortal({
                                 >
                                   <input
                                     type="checkbox"
-                                    checked={selectedYears.includes(yr.year)}
+                                    checked={yr.status === 'paid' || yr.status === 'processing' || selectedYears.includes(yr.year)}
+                                    disabled={yr.status === 'paid' || yr.status === 'processing'}
                                     onChange={() => toggleYear(yr.year)}
                                     style={{
                                       width: 16,
                                       height: 16,
-                                      cursor: "pointer",
+                                      cursor: yr.status === 'paid' || yr.status === 'processing' ? "not-allowed" : "pointer",
                                       accentColor: theme.maroon,
                                     }}
                                   />
@@ -1823,17 +1979,53 @@ export default function MCRenewalPortal({
                           >
                             First Name *
                           </div>
-                          <input
-                            type="text"
-                            value={applicant.firstName}
-                            onChange={(e) =>
-                              setApplicant({
-                                ...applicant,
-                                firstName: e.target.value,
-                              })
-                            }
-                            style={inputStyle}
-                          />
+                          <div style={{ display: 'flex', gap: 0 }}>
+                            <select
+                              value={applicant.title}
+                              onChange={(e) => {
+                                setApplicant({
+                                  ...applicant,
+                                  title: e.target.value,
+                                });
+                                if (errors.title) setErrors({ ...errors, title: null });
+                              }}
+                              style={{
+                                ...inputStyle,
+                                borderColor: errors.title ? theme.red : theme.border,
+                                width: '85px',
+                                padding: '10px 8px',
+                                borderRadius: '8px 0 0 8px',
+                                borderRight: 'none',
+                                background: '#f8fafc',
+                                color: applicant.title ? theme.text : theme.text3
+                              }}
+                            >
+                              <option value="" disabled>Title</option>
+                              <option value="Mr.">Mr.</option>
+                              <option value="Mrs.">Mrs.</option>
+                              <option value="Miss.">Miss.</option>
+                              <option value="Rev.">Rev.</option>
+                              <option value="Dr.">Dr.</option>
+                            </select>
+                            <input
+                              type="text"
+                              value={applicant.firstName}
+                              onChange={(e) => {
+                                setApplicant({
+                                  ...applicant,
+                                  firstName: e.target.value,
+                                });
+                                if (errors.firstName) setErrors({ ...errors, firstName: null });
+                              }}
+                              style={{
+                                ...inputStyle,
+                                borderColor: errors.firstName ? theme.red : theme.border,
+                                borderRadius: '0 8px 8px 0',
+                                flex: 1
+                              }}
+                            />
+                          </div>
+                          {(errors.title || errors.firstName) && <div style={{ color: theme.red, fontSize: 11, marginTop: 4 }}>{errors.title ? errors.title : errors.firstName}</div>}
                         </div>
                         <div>
                           <div
@@ -1849,14 +2041,16 @@ export default function MCRenewalPortal({
                           <input
                             type="text"
                             value={applicant.lastName}
-                            onChange={(e) =>
+                            onChange={(e) => {
                               setApplicant({
                                 ...applicant,
                                 lastName: e.target.value,
-                              })
-                            }
-                            style={inputStyle}
+                              });
+                              if (errors.lastName) setErrors({ ...errors, lastName: null });
+                            }}
+                            style={{ ...inputStyle, borderColor: errors.lastName ? theme.red : theme.border }}
                           />
+                          {errors.lastName && <div style={{ color: theme.red, fontSize: 11, marginTop: 4 }}>{errors.lastName}</div>}
                         </div>
                         <div>
                           <div
@@ -1872,14 +2066,16 @@ export default function MCRenewalPortal({
                           <input
                             type="tel"
                             value={applicant.phone}
-                            onChange={(e) =>
+                            onChange={(e) => {
                               setApplicant({
                                 ...applicant,
                                 phone: e.target.value,
-                              })
-                            }
-                            style={inputStyle}
+                              });
+                              if (errors.phone) setErrors({ ...errors, phone: null });
+                            }}
+                            style={{ ...inputStyle, borderColor: errors.phone ? theme.red : theme.border }}
                           />
+                          {errors.phone && <div style={{ color: theme.red, fontSize: 11, marginTop: 4 }}>{errors.phone}</div>}
                         </div>
                         <div>
                           <div
@@ -1895,14 +2091,16 @@ export default function MCRenewalPortal({
                           <input
                             type="email"
                             value={applicant.email}
-                            onChange={(e) =>
+                            onChange={(e) => {
                               setApplicant({
                                 ...applicant,
                                 email: e.target.value,
-                              })
-                            }
-                            style={inputStyle}
+                              });
+                              if (errors.email) setErrors({ ...errors, email: null });
+                            }}
+                            style={{ ...inputStyle, borderColor: errors.email ? theme.red : theme.border }}
                           />
+                          {errors.email && <div style={{ color: theme.red, fontSize: 11, marginTop: 4 }}>{errors.email}</div>}
                         </div>
                         <div style={{ gridColumn: "1 / -1" }}>
                           <div
@@ -1918,11 +2116,13 @@ export default function MCRenewalPortal({
                           <input
                             type="text"
                             value={applicant.nic}
-                            onChange={(e) =>
-                              setApplicant({ ...applicant, nic: e.target.value })
-                            }
-                            style={inputStyle}
+                            onChange={(e) => {
+                              setApplicant({ ...applicant, nic: e.target.value });
+                              if (errors.nic) setErrors({ ...errors, nic: null });
+                            }}
+                            style={{ ...inputStyle, borderColor: errors.nic ? theme.red : theme.border }}
                           />
+                          {errors.nic && <div style={{ color: theme.red, fontSize: 11, marginTop: 4 }}>{errors.nic}</div>}
                         </div>
                         <div style={{ gridColumn: "1 / -1" }}>
                           <div
@@ -1938,14 +2138,16 @@ export default function MCRenewalPortal({
                           <input
                             type="text"
                             value={applicant.addr1}
-                            onChange={(e) =>
+                            onChange={(e) => {
                               setApplicant({
                                 ...applicant,
                                 addr1: e.target.value,
-                              })
-                            }
-                            style={inputStyle}
+                              });
+                              if (errors.addr1) setErrors({ ...errors, addr1: null });
+                            }}
+                            style={{ ...inputStyle, borderColor: errors.addr1 ? theme.red : theme.border }}
                           />
+                          {errors.addr1 && <div style={{ color: theme.red, fontSize: 11, marginTop: 4 }}>{errors.addr1}</div>}
                         </div>
                         <div>
                           <div
@@ -2006,15 +2208,16 @@ export default function MCRenewalPortal({
                           </div>
                           <select
                             value={applicant.province}
-                            onChange={(e) =>
+                            onChange={(e) => {
                               setApplicant({
                                 ...applicant,
                                 province: e.target.value,
                                 district: "",
                                 city: "",
-                              })
-                            }
-                            style={inputStyle}
+                              });
+                              if (errors.province) setErrors({ ...errors, province: null });
+                            }}
+                            style={{ ...inputStyle, borderColor: errors.province ? theme.red : theme.border }}
                           >
                             <option value="">Select Province</option>
                             {Object.keys(sriLankaData).map((p) => (
@@ -2023,6 +2226,7 @@ export default function MCRenewalPortal({
                               </option>
                             ))}
                           </select>
+                          {errors.province && <div style={{ color: theme.red, fontSize: 11, marginTop: 4 }}>{errors.province}</div>}
                         </div>
                         <div>
                           <div
@@ -2037,14 +2241,15 @@ export default function MCRenewalPortal({
                           </div>
                           <select
                             value={applicant.district}
-                            onChange={(e) =>
+                            onChange={(e) => {
                               setApplicant({
                                 ...applicant,
                                 district: e.target.value,
                                 city: "",
-                              })
-                            }
-                            style={inputStyle}
+                              });
+                              if (errors.district) setErrors({ ...errors, district: null });
+                            }}
+                            style={{ ...inputStyle, borderColor: errors.district ? theme.red : theme.border }}
                             disabled={!applicant.province}
                           >
                             <option value="">Select District</option>
@@ -2057,6 +2262,7 @@ export default function MCRenewalPortal({
                                 </option>
                               ))}
                           </select>
+                          {errors.district && <div style={{ color: theme.red, fontSize: 11, marginTop: 4 }}>{errors.district}</div>}
                         </div>
                         <div>
                           <div
@@ -2072,14 +2278,16 @@ export default function MCRenewalPortal({
                           <input
                             type="text"
                             value={applicant.city}
-                            onChange={(e) =>
+                            onChange={(e) => {
                               setApplicant({
                                 ...applicant,
                                 city: e.target.value,
-                              })
-                            }
-                            style={inputStyle}
+                              });
+                              if (errors.city) setErrors({ ...errors, city: null });
+                            }}
+                            style={{ ...inputStyle, borderColor: errors.city ? theme.red : theme.border }}
                           />
+                          {errors.city && <div style={{ color: theme.red, fontSize: 11, marginTop: 4 }}>{errors.city}</div>}
                         </div>
                       </div>
                       <div
@@ -2095,21 +2303,16 @@ export default function MCRenewalPortal({
                         >
                           Back
                         </button>
-                        {applicant.firstName &&
-                          applicant.lastName &&
-                          applicant.phone &&
-                          applicant.nic &&
-                          applicant.addr1 &&
-                          applicant.province &&
-                          applicant.district &&
-                          applicant.city && (
-                            <button
-                              onClick={() => setStep(4)}
-                              style={pillBtn(true)}
-                            >
-                              Save and Payment
-                            </button>
-                          )}
+                        <button
+                          onClick={() => {
+                            if (validateApplicant()) {
+                              setStep(4);
+                            }
+                          }}
+                          style={pillBtn(true)}
+                        >
+                          Save and Payment
+                        </button>
                       </div>
                     </SectionCard>
                   )}
@@ -2253,7 +2456,7 @@ export default function MCRenewalPortal({
                             opacity: paying ? 0.7 : 1,
                           }}
                         >
-                          {paying ? "Processing..." : "Save and Payment"}
+                          {paying ? "Processing..." : "Save & Generate Reference"}
                         </button>
                       </div>
                     </SectionCard>
@@ -2379,21 +2582,37 @@ export default function MCRenewalPortal({
                       </div>
                     </div>
                     <br />
-                    <button
-                      onClick={downloadReceipt}
-                      style={{
-                        padding: "12px 24px",
-                        borderRadius: 999,
-                        fontSize: 13.5,
-                        fontWeight: 600,
-                        cursor: "pointer",
-                        background: theme.maroon,
-                        color: "#fff",
-                        border: "none",
-                      }}
-                    >
-                      ⬇ Download Renewal Receipt
-                    </button>
+                    {step === 5 ? (
+                      <div
+                        style={{
+                          padding: "12px 24px",
+                          borderRadius: 999,
+                          fontSize: 13.5,
+                          fontWeight: 600,
+                          background: "#f3f4f6",
+                          color: "#6b7280",
+                          display: "inline-block"
+                        }}
+                      >
+                        ⏳ Pending Approval
+                      </div>
+                    ) : (
+                      <button
+                        onClick={downloadReceipt}
+                        style={{
+                          padding: "12px 24px",
+                          borderRadius: 999,
+                          fontSize: 13.5,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          background: theme.maroon,
+                          color: "#fff",
+                          border: "none",
+                        }}
+                      >
+                        ⬇ Download Renewal Receipt
+                      </button>
+                    )}
                     {step === 5 && (
                       <div
                         style={{
@@ -2613,6 +2832,104 @@ export default function MCRenewalPortal({
             </div>
           </div>
         )}
+
+        {/* --- STEP 5 & 6: Success / Receipt --- */}
+        {renewalRecord && (step === 5 || step === 6) && (
+          <div
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: "rgba(0,0,0,0.6)",
+              backdropFilter: "blur(4px)",
+              zIndex: 9999,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 20,
+            }}
+          >
+            <div
+              style={{
+                background: "#fff",
+                borderRadius: 16,
+                width: "100%",
+                maxWidth: 440,
+                boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
+                overflow: "hidden",
+                animation: "scaleIn 0.2s ease-out",
+                position: "relative",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => { setRenewalRecord(null); setStep(0); quitToDashboard(); }}
+                style={{
+                  position: "absolute",
+                  top: 10,
+                  right: 10,
+                  background: "transparent",
+                  border: "none",
+                  fontSize: 18,
+                  color: theme.text3,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 28,
+                  height: 28,
+                  borderRadius: "50%",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#f3f4f6")}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+              >
+                <i className="fas fa-times"></i>
+              </button>
+              <div style={{ padding: "36px 20px 20px 20px" }}>
+                <div style={{ border: `2px dashed ${theme.green}`, borderRadius: 8, padding: "12px", textAlign: "center", marginBottom: 18 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: theme.green, letterSpacing: 1, textTransform: "uppercase" }}>RENEWAL REFERENCE NUMBER</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: theme.text, marginTop: 4, fontFamily: fontMono }}>{renewalRecord.ref_no}</div>
+                </div>
+
+                <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
+                  <div style={{ flex: 1, textAlign: "center", border: `1px solid ${theme.gold}`, borderRadius: 8, padding: "8px", color: "#8a6d00", fontWeight: 600, fontSize: 12.5, background: theme.amberBg }}>
+                    Payment: {renewalRecord.status === 'active' ? <span style={{ color: theme.green }}>Completed</span> : 'Pending'}
+                  </div>
+                  <div style={{ flex: 1, textAlign: "center", border: `1px solid ${theme.gold}`, borderRadius: 8, padding: "8px", color: "#8a6d00", fontWeight: 600, fontSize: 12.5, background: theme.amberBg }}>
+                    Approval: {renewalRecord.status === 'active' ? <span style={{ color: theme.green }}>Approved</span> : 'Pending'}
+                  </div>
+                </div>
+
+                <div style={{ background: theme.cream, border: `1px solid ${theme.border}`, borderRadius: 8, padding: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, fontSize: 12.5, borderBottom: `1px dashed ${theme.border}`, paddingBottom: 8 }}>
+                    <span style={{ fontWeight: 600, color: theme.text2 }}>MC / M.Com:</span>
+                    <span style={{ textAlign: "right", color: theme.text }}>{renewalRecord.mc_name || selectedMC?.name}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, fontSize: 12.5, borderBottom: `1px dashed ${theme.border}`, paddingBottom: 8 }}>
+                    <span style={{ fontWeight: 600, color: theme.text2 }}>Renewal Years:</span>
+                    <span style={{ color: theme.text }}>{renewalRecord.years?.join(', ')}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, fontWeight: 700, color: theme.text, paddingTop: 4 }}>
+                    <span>Final Amount:</span>
+                    <span style={{ color: theme.green }}>{money(renewalRecord.amount)}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ padding: "14px 20px", display: "flex", gap: 10, justifyContent: "center", borderTop: `1px solid ${theme.border}` }}>
+                <button onClick={refreshStatusNow} disabled={isRefreshing} style={{ padding: "6px 16px", fontSize: 12, background: "#fff", border: `1.5px solid ${theme.maroon}`, color: theme.maroon, fontWeight: 600, borderRadius: 6, cursor: "pointer", opacity: isRefreshing ? 0.7 : 1 }}>
+                  {isRefreshing ? <><i className="fas fa-spinner fa-spin"></i> Refreshing...</> : 'Refresh Status'}
+                </button>
+                <button onClick={() => { if (renewalRecord.status === 'active') { downloadReceipt(renewalRecord); } else { setRenewalRecord(null); setStep(0); quitToDashboard(); } }} style={{ padding: "6px 16px", fontSize: 12, background: theme.maroon, border: `1.5px solid ${theme.maroon}`, color: "#fff", fontWeight: 600, borderRadius: 6, cursor: "pointer" }}>
+                  {renewalRecord.status === 'active' ? 'Download Receipt' : 'Close'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );

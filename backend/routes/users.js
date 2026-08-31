@@ -2,6 +2,7 @@ const express = require('express');
 const { Op } = require('sequelize');
 const path = require('path');
 const fs = require('fs');
+const bcrypt = require('bcryptjs');
 const router = express.Router();
 const db = require('../db');
 
@@ -45,7 +46,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { username, password, name, role, email, avatar_url } = req.body || {};
+    const { username, password, name, role, department, designation, email, avatar_url, user_name } = req.body || {};
     const normalizedUsername = normalizeUsername(username);
     const normalizedName = String(name || '').trim();
     const normalizedRole = String(role || '').trim();
@@ -59,9 +60,11 @@ router.post('/', async (req, res) => {
       if (existing.is_deleted) {
         // Reactivate soft-deleted user and update fields
         existing.is_deleted = false;
-        existing.password = String(password);
+        existing.password = await bcrypt.hash(String(password), 10);
         existing.name = normalizedName;
         existing.role = normalizedRole;
+        existing.department = String(department || '').trim() || null;
+        existing.designation = String(designation || '').trim() || null;
         existing.email = String(email || '').trim() || null;
         existing.avatar_url = String(avatar_url || '').trim() || null;
         await existing.save();
@@ -70,15 +73,26 @@ router.post('/', async (req, res) => {
       return res.status(409).json({ error: 'Username is already taken.' });
     }
 
+    const hashedPassword = await bcrypt.hash(String(password), 10);
     const user = await db.models.User.create({
       username: normalizedUsername,
-      password: String(password),
+      password: hashedPassword,
       name: normalizedName,
       role: normalizedRole,
+      department: String(department || '').trim() || null,
+      designation: String(designation || '').trim() || null,
       email: String(email || '').trim() || null,
       avatar_url: String(avatar_url || '').trim() || null,
       is_deleted: false,
     });
+
+    if (db.models.SystemLog) {
+      await db.models.SystemLog.create({
+        user_name: user_name || 'System',
+        action: 'Added new User',
+        details: `User ${normalizedName || normalizedUsername} added`
+      }).catch(e => console.error("SystemLog error:", e));
+    }
 
     res.json(user.get({ plain: true }));
   } catch (err) {
@@ -94,7 +108,7 @@ router.patch('/:id', async (req, res) => {
       return res.status(404).json({ error: 'User not found.' });
     }
 
-    const { username, password, name, role, email, avatar_url } = req.body || {};
+    const { username, password, name, role, department, designation, email, avatar_url, user_name } = req.body || {};
     if (username) {
       const normalizedUsername = normalizeUsername(username);
       if (normalizedUsername !== user.username) {
@@ -106,12 +120,23 @@ router.patch('/:id', async (req, res) => {
       }
     }
     if (name) user.name = String(name).trim();
-    if (role) user.role = String(role).trim();
+    if (role !== undefined) user.role = String(role || '').trim();
+    if (department !== undefined) user.department = String(department || '').trim() || null;
+    if (designation !== undefined) user.designation = String(designation || '').trim() || null;
     if (email !== undefined) user.email = String(email || '').trim() || null;
     if (avatar_url !== undefined) user.avatar_url = String(avatar_url || '').trim() || null;
-    if (password) user.password = String(password);
+    if (password) user.password = await bcrypt.hash(String(password), 10);
 
     await user.save();
+    
+    if (db.models.SystemLog) {
+      await db.models.SystemLog.create({
+        user_name: user_name || 'System',
+        action: 'Updated User',
+        details: `User ${user.name || user.username} updated`
+      }).catch(e => console.error("SystemLog error:", e));
+    }
+
     res.json(user.get({ plain: true }));
   } catch (err) {
     console.error('PATCH /users/:id error:', err);
@@ -137,16 +162,31 @@ router.delete('/:id', async (req, res) => {
 router.post('/:id/ping', async (req, res) => {
   try {
     const user = await db.models.User.findByPk(req.params.id);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found.' });
-    }
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+
+    // Update last_ping and is_online
+    user.last_ping = new Date();
     user.is_online = true;
     user.last_active = new Date();
     await user.save();
-    res.json({ success: true });
+    
+    const payload = user.get({ plain: true });
+    delete payload.password;
+    if (payload.role) {
+      const dbRole = await db.models.Role.findOne({ where: { name: payload.role } });
+      if (dbRole) {
+        try {
+          payload.permissions = JSON.parse(dbRole.permissions);
+        } catch(e) {
+          console.error('Failed to parse permissions for role:', payload.role);
+        }
+      }
+    }
+
+    res.json({ success: true, user: payload });
   } catch (err) {
     console.error('POST /users/:id/ping error:', err);
-    res.status(500).json({ error: 'Failed to ping user.' });
+    res.status(500).json({ error: 'Failed to ping.' });
   }
 });
 
@@ -192,7 +232,11 @@ router.patch('/:id/avatar', async (req, res) => {
       
       const name1 = `${baseName}-${size}${ext}`;
       const path1 = path.join(avatarsDir, name1);
-      await sharp(buf).resize(size, size, { fit: 'cover' }).toFile(path1);
+      await sharp(buf)
+        .rotate() // Auto-orient based on EXIF
+        .resize(size, size, { fit: 'cover' })
+        .jpeg({ quality: 100 }) // Force high quality to prevent blurriness
+        .toFile(path1);
       
       avatarUrl = `/uploads/avatars/${name1}`;
       

@@ -98,6 +98,7 @@ module.exports = (models) => {
       const { name, username } = req.query;
       const limit = parseInt(req.query.limit) || 5;
       let where = {};
+      let whereWithHistory = {};
 
       if (name || username) {
         // Construct search criteria matching variations of name / username
@@ -106,12 +107,19 @@ module.exports = (models) => {
         if (username) userTerms.push(`%${username}%`);
 
         const orConditions = [];
+        const orConditionsWithHistory = [];
+
         for (const term of userTerms) {
           orConditions.push({ created_by: { [Op.like]: term } });
           orConditions.push({ modified_by: { [Op.like]: term } });
+
+          orConditionsWithHistory.push({ created_by: { [Op.like]: term } });
+          orConditionsWithHistory.push({ modified_by: { [Op.like]: term } });
+          orConditionsWithHistory.push({ history: { [Op.like]: term } });
         }
 
         where = { [Op.or]: orConditions };
+        whereWithHistory = { [Op.or]: orConditionsWithHistory };
       }
 
       let sysLogWhere = {};
@@ -126,103 +134,178 @@ module.exports = (models) => {
         sysLogWhere = { [Op.or]: orConditions };
       }
 
+      // We fetch more records (limit * 5) from DB so we can filter out Bulk imports in JS
+      // This prevents the bug where a record that was once bulk imported (and has 'Bulk' in its history)
+      // is forever excluded from the timeline even if it's manually updated later.
+      const fetchLimit = limit * 5;
+
+      const user_id = req.query.user_id;
+
       // Query latest entries across primary audited tables in parallel
-      const [mcs, mcoms, cfiles, complaints, discussions, systemLogs] = await Promise.all([
-        models.ManagementCorporation.findAll({ where, limit, order: [['updated_at', 'DESC']] }).catch(() => []),
-        models.McomRecord.findAll({ where, limit, order: [['updated_at', 'DESC']] }).catch(() => []),
-        models.Cfile.findAll({ where, limit, order: [['updated_at', 'DESC']] }).catch(() => []),
-        models.Complaint.findAll({ where, limit, order: [['updated_at', 'DESC']] }).catch(() => []),
-        models.Discussion.findAll({ where, limit, order: [['updated_at', 'DESC']] }).catch(() => []),
-        models.SystemLog ? models.SystemLog.findAll({ where: sysLogWhere, limit, order: [['created_at', 'DESC']] }).catch(() => []) : [],
+      const [mcs, mcoms, cfiles, complaints, discussions, renewals, agmRecords, invoices, reports, systemLogs, dailyActs, allUsers] = await Promise.all([
+        models.ManagementCorporation.findAll({ where: whereWithHistory, limit: fetchLimit, order: [['updated_at', 'DESC']] }).catch(() => []),
+        models.McomRecord.findAll({ where: whereWithHistory, limit: fetchLimit, order: [['updated_at', 'DESC']] }).catch(() => []),
+        models.Cfile.findAll({ where: whereWithHistory, limit: fetchLimit, order: [['updated_at', 'DESC']] }).catch(() => []),
+        models.Complaint.findAll({ where: whereWithHistory, limit: fetchLimit, order: [['updated_at', 'DESC']] }).catch(() => []),
+        models.Discussion.findAll({ where: whereWithHistory, limit: fetchLimit, order: [['updated_at', 'DESC']] }).catch(() => []),
+        models.Renewal ? models.Renewal.findAll({ where, limit: fetchLimit, order: [['updated_at', 'DESC']] }).catch(() => []) : [],
+        models.AgmRecord ? models.AgmRecord.findAll({ where, limit: fetchLimit, order: [['updatedAt', 'DESC']] }).catch(() => []) : [],
+        models.RegistrationPayableInvoice ? models.RegistrationPayableInvoice.findAll({ where: whereWithHistory, limit: fetchLimit, order: [['updated_at', 'DESC']] }).catch(() => []) : [],
+        models.ReportDocument ? models.ReportDocument.findAll({ where, limit: fetchLimit, order: [['created_at', 'DESC']] }).catch(() => []) : [],
+        models.SystemLog ? models.SystemLog.findAll({ where: sysLogWhere, limit: fetchLimit, order: [['created_at', 'DESC']] }).catch(() => []) : [],
+        models.DailyActivity && user_id ? models.DailyActivity.findAll({ where: { user_id }, limit: fetchLimit, order: [['activity_date', 'DESC']] }).catch(() => []) : [],
+        models.User ? models.User.findAll({ attributes: ['name', 'designation', 'role'] }).catch(() => []) : []
       ]);
+
+      const userRoleMap = {};
+      if (allUsers) {
+        allUsers.forEach(u => {
+          if (u.name) {
+            userRoleMap[u.name.trim()] = u.designation || u.role || 'User';
+          }
+        });
+      }
 
       const logs = [];
 
-      const getLatestAction = (record, defaultText) => {
-        let name = record.modified_by || 'System';
-        let note = defaultText;
-        if (!record.history) return { name, note };
-        try {
-          const list = typeof record.history === 'string' ? JSON.parse(record.history) : record.history;
-          if (Array.isArray(list) && list.length > 0) {
-            // Sort by time descending
-            list.sort((a, b) => new Date(b.time || b.date || b.timestamp) - new Date(a.time || a.date || a.timestamp));
-            const latest = list[0];
-            name = latest.name || latest.user || latest.username || record.modified_by || 'System';
-            note = latest.note || latest.action || defaultText;
+      const extractAllActions = (records, defaultText, idPrefix, getTitle) => {
+        records.forEach(record => {
+          const title = getTitle(record) || idPrefix;
+          let pushedFromHistory = false;
+          if (record.history) {
+            try {
+              const list = typeof record.history === 'string' ? JSON.parse(record.history) : record.history;
+              if (Array.isArray(list) && list.length > 0) {
+                list.forEach((item, index) => {
+                  const recordUser = record.modified_by || record.updated_by || record.created_by || record.uploaded_by || record.action_by || 'System';
+                  let name = item.name || item.user || item.username || recordUser;
+                  
+                  // Append role if present and not already appended
+                  const role = userRoleMap[name?.trim()];
+                  if (role && name && !name.includes('(')) {
+                    name = `${name} (${role})`;
+                  }
+
+                  const note = item.note || item.action || defaultText;
+                  const time = item.time || item.date || item.timestamp || record.updated_at || record.created_at;
+                  logs.push({
+                    id: `${idPrefix}-${record.id}-hist-${index}`,
+                    time,
+                    user: name,
+                    action: `${note} — ${title}`,
+                    text: `${name}: ${note} — ${title}`
+                  });
+                });
+                pushedFromHistory = true;
+              }
+            } catch (e) { }
           }
-        } catch (e) { }
-        return { name, note };
+          // Removed the !pushedFromHistory block so that we do not generate
+          // fake logs for bulk imported items. Real updates will either be
+          // in the history JSON array or recorded natively in SystemLog.
+        });
       };
 
-      mcs.forEach(mc => {
-        const { name, note } = getLatestAction(mc, 'updated MC record');
+      extractAllActions(mcs, 'updated MC record', 'mc', r => r.management_corporation_name || r.name || r.file_no);
+      extractAllActions(mcoms, 'updated M.Com record', 'mcom', r => r.management_corporation_name || r.new_file_no || r.old_file_no);
+      extractAllActions(cfiles, 'updated C-File', 'cfile', r => r.file_no || r.name_of_apartment);
+      extractAllActions(complaints, 'updated Complaint', 'complaint', r => r.complaint_no || r.subject);
+      extractAllActions(discussions, 'updated Discussion', 'discussion', r => r.appointment);
+      extractAllActions(invoices, 'updated Invoice', 'invoice', r => `Invoice ${r.invoice_number || r.id}`);
+
+      renewals.forEach(r => {
         logs.push({
-          id: `mc-${mc.id}`,
-          time: mc.updated_at || mc.created_at,
-          user: name,
-          action: `${note} — ${mc.management_corporation_name || mc.name || mc.file_no || 'MC'}`,
-          text: `${name}: ${note} — ${mc.management_corporation_name || mc.name || mc.file_no || 'MC'}`
+          id: `renewal-${r.id}`,
+          time: r.updated_at || r.created_at,
+          user: r.action_by || 'System',
+          action: `updated MC Renewal — ${r.ref_no || r.mc_name || 'Renewal'} (Status: ${r.status || 'Pending'})`,
+          text: `${r.action_by || 'System'}: updated MC Renewal — ${r.ref_no || r.mc_name || 'Renewal'} (Status: ${r.status || 'Pending'})`
         });
       });
 
-      mcoms.forEach(m => {
-        const { name, note } = getLatestAction(m, 'updated M.Com record');
+      agmRecords.forEach(a => {
         logs.push({
-          id: `mcom-${m.id}`,
-          time: m.updated_at || m.created_at,
-          user: name,
-          action: `${note} — ${m.management_corporation_name || m.new_file_no || m.old_file_no || 'M.Com'}`,
-          text: `${name}: ${note} — ${m.management_corporation_name || m.new_file_no || m.old_file_no || 'M.Com'}`
+          id: `agm-${a.id}`,
+          time: a.updatedAt || a.createdAt,
+          user: a.uploaded_by || 'System',
+          action: `updated AGM Record — ${a.file_no || a.mc_name || 'AGM'}`,
+          text: `${a.uploaded_by || 'System'}: updated AGM Record — ${a.file_no || a.mc_name || 'AGM'}`
         });
       });
 
-      cfiles.forEach(cf => {
-        const { name, note } = getLatestAction(cf, 'updated C-File');
+      invoices.forEach(i => {
+        const { name, note } = getLatestAction(i, 'updated Invoice');
         logs.push({
-          id: `cfile-${cf.id}`,
-          time: cf.updated_at || cf.created_at,
+          id: `invoice-${i.id}`,
+          time: i.updated_at || i.created_at,
           user: name,
-          action: `${note} — ${cf.file_no || cf.name_of_apartment || 'C-File'}`,
-          text: `${name}: ${note} — ${cf.file_no || cf.name_of_apartment || 'C-File'}`
+          action: `${note} — Invoice ${i.invoice_number || i.id}`,
+          text: `${name}: ${note} — Invoice ${i.invoice_number || i.id}`
         });
       });
 
-      complaints.forEach(c => {
-        const { name, note } = getLatestAction(c, 'updated Complaint');
+      reports.forEach(r => {
         logs.push({
-          id: `complaint-${c.id}`,
-          time: c.updated_at || c.created_at,
-          user: name,
-          action: `${note} — ${c.complaint_no || c.subject || 'Complaint'}`,
-          text: `${name}: ${note} — ${c.complaint_no || c.subject || 'Complaint'}`
-        });
-      });
-
-      discussions.forEach(d => {
-        const { name, note } = getLatestAction(d, 'updated Discussion');
-        logs.push({
-          id: `discussion-${d.id}`,
-          time: d.updated_at || d.created_at,
-          user: name,
-          action: `${note} — ${d.appointment || 'Discussion'}`,
-          text: `${name}: ${note} — ${d.appointment || 'Discussion'}`
+          id: `report-${r.id}`,
+          time: r.created_at,
+          user: r.created_by || 'System',
+          action: `uploaded Report — ${r.file_name}`,
+          text: `${r.created_by || 'System'}: uploaded Report — ${r.file_name}`
         });
       });
 
       systemLogs.forEach(log => {
+        let logUser = log.user_name || 'System';
+        
+        const role = userRoleMap[logUser?.trim()];
+        if (role && logUser && !logUser.includes('(')) {
+          logUser = `${logUser} (${role})`;
+        }
+
         logs.push({
           id: `syslog-${log.id}`,
           time: log.created_at,
-          user: log.user_name || 'System',
+          user: logUser,
           action: `${log.action} — ${log.details}`,
-          text: `${log.user_name || 'System'}: ${log.action} — ${log.details}`
+          text: `${logUser}: ${log.action} — ${log.details}`
         });
       });
 
+      if (dailyActs) {
+        dailyActs.forEach(act => {
+          let uName = name || username || 'User';
+          
+          const role = userRoleMap[uName?.trim()];
+          if (role && uName && !uName.includes('(')) {
+            uName = `${uName} (${role})`;
+          }
+
+          logs.push({
+            id: `act-${act.id}`,
+            time: act.activity_date || act.updated_at,
+            user: uName,
+            action: act.activity_category || 'Activity Update',
+            text: `${uName}: Logged daily activity — ${act.activity_text}`
+          });
+        });
+      }
+
       // Sort combined activity logs by timestamp desc
       logs.sort((a, b) => new Date(b.time) - new Date(a.time));
-      const slicedLogs = logs.slice(0, limit);
+      
+      // Filter out bulk imports at the JS level (only if the LATEST action was a Bulk action)
+      let nonBulkLogs = logs.filter(log => !log.action.includes('Bulk Added') && !log.action.includes('Bulk Updated') && log.user !== 'System');
+
+      if (name || username) {
+        const lowerName = (name || '').toLowerCase();
+        const lowerUser = (username || '').toLowerCase();
+        nonBulkLogs = nonBulkLogs.filter(log => {
+          const logUser = (log.user || '').toLowerCase();
+          return (lowerName && logUser.includes(lowerName)) || (lowerUser && logUser.includes(lowerUser));
+        });
+      }
+
+      const slicedLogs = nonBulkLogs.slice(0, limit);
 
       res.json({ items: slicedLogs });
     } catch (err) {

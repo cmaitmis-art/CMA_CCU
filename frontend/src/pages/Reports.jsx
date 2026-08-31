@@ -887,7 +887,6 @@ function FullSummary({ fullData, fullStats, loading }) {
   const statMap = { mc: fullStats.mc, mcom: fullStats.mcom, cf: fullStats.cf, complaints: fullStats.comp };
 
   const printAll = () => {
-    const w = window.open('', '_blank'); if (!w) return;
     let body = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Full Report</title><style>
       ${SINHALA_FONT_IMPORT}
       @page{size:landscape;margin:0 !important}
@@ -936,8 +935,14 @@ function FullSummary({ fullData, fullStats, loading }) {
         <tbody>${rows.map((r, i) => `<tr><td>${i + 1}</td>${printFields.map(f => `<td>${fv(r, f.key)}</td>`).join('')}</tr>`).join('')}</tbody>
         </table></div>`;
     }
-    body += `<div class="grand">GRAND TOTAL: ${grand} records</div></body></html>`;
-    w.document.write(body); w.document.close(); setTimeout(() => w.print(), 500);
+    body += `<div class="grand">GRAND TOTAL: ${grand} records</div>
+    <script>window.addEventListener('load', function(){ setTimeout(function(){ window.print(); }, 500); });</script>
+    </body></html>`;
+    
+    const blob = new Blob([body], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank', 'noopener,noreferrer');
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   };
 
   if (loading) return <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)' }}><i className="fas fa-spinner fa-spin" style={{ fontSize: 20, display: 'block', marginBottom: 8 }} /> Loading…</div>;
@@ -1102,23 +1107,17 @@ function DocumentCard({ doc, onRemove }) {
   };
 
   const handlePrint = () => {
-    const w = window.open('', '_blank');
-    if (!w) {
-      window.open(freshUrl, '_blank');
-      return;
-    }
-
+    let html = '';
     if (isImg) {
       // Images render directly — print the real picture using the full page.
-      w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${doc.name}</title>
+      html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${doc.name}</title>
         <style>@page{size:auto;margin:0}html,body{margin:0;padding:0;background:#fff;height:100%;width:100%}
         body{display:flex;align-items:center;justify-content:center;padding:0}
         img{display:block;width:100%;height:auto;max-height:100vh;object-fit:contain;box-shadow:none}</style></head>
-        <body><img src="${freshUrl}" onload="window.print()" /></body></html>`);
-      w.document.close();
+        <body><img src="${freshUrl}" onload="window.print()" /></body></html>`;
     } else if (isPdf) {
       // Print real PDF by using an embedded iframe and a full-page layout.
-      w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${doc.name}</title>
+      html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${doc.name}</title>
         <style>@page{size:auto;margin:0}html,body{margin:0;padding:0;height:100%;width:100%;background:#fff}
         body{display:block}iframe{display:block;width:100%;height:100%;border:none}@media print{body{margin:0;padding:0}}</style></head>
         <body>
@@ -1132,11 +1131,10 @@ function DocumentCard({ doc, onRemove }) {
               }, 300);
             };
             setTimeout(() => { try { window.print(); } catch(e){}; }, 1500);
-          <\/script>
-        </body></html>`);
-      w.document.close();
+          </script>
+        </body></html>`;
     } else {
-      w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${doc.name}</title>
+      html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${doc.name}</title>
         <style>${SINHALA_FONT_IMPORT}
         @page{size:auto;margin:0}html,body{margin:0;padding:0;width:100%;height:100%;background:#fff}
         body{font-family:${SINHALA_FONT_STACK};font-size:12px;padding:20px;color:#1a1a2e;display:flex;flex-direction:column;justify-content:center;min-height:100vh;box-sizing:border-box}
@@ -1148,9 +1146,12 @@ function DocumentCard({ doc, onRemove }) {
         <div class="hdr"><h2>${doc.name}</h2><p>Uploaded ${doc.uploadedAt} • ${fmtSize(doc.size)}</p></div>
         <div class="note">This file type can't be previewed in the browser for printing.<br/>Download it and open in the native application to print.</div>
         <a class="link" href="${freshUrl}" target="_blank" rel="noopener noreferrer">Download ${doc.name}</a>
-        </body></html>`);
-      w.document.close();
+        </body></html>`;
     }
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank', 'noopener,noreferrer');
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   };
 
   return (
@@ -1199,7 +1200,7 @@ function DocumentCard({ doc, onRemove }) {
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────
-export default function Reports() {
+export default function Reports({ currentUser }) {
   const [stats, setStats] = useState({ mc: 0, mcom: 0, cfiles: 0, pendingComplaints: 0 });
   const [active, setActive] = useState(() => {
     return sessionStorage.getItem('cma_reports_active') || null;
@@ -1233,6 +1234,9 @@ export default function Reports() {
 
     const form = new FormData();
     for (const f of files) form.append('files', f);
+    if (currentUser && currentUser.name) {
+      form.append('created_by', currentUser.name);
+    }
 
     try {
       // Upload docs first. (The UI already supports PDF upload & list/print/download)

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
+import { getServerDate } from '../utils/serverTime.js';
 import {
   fetchMComs,
   importMComsBulk,
@@ -6,13 +7,17 @@ import {
 } from '../api';
 import { useConfirmDialog } from '../ConfirmDialogContext.jsx';
 import '../CMAStyles.css';
+import '../components/mc-management/MCManagement.css';
 import * as XLSX from 'xlsx';
 import HistoryModal from '../components/HistoryModal.jsx';
 import { exportToPdfPrint } from '../utils/pdfExport';
+import html2pdf from 'html2pdf.js';
 import { MONTH_OPTIONS, getYearFilterOptions } from '../utils/filterConstants';
 import GenericExportModal from '../components/GenericExportModal.jsx';
 import { useSettings } from '../SettingsContext.jsx';
+import { hasPermission } from '../utils/roleLabel.js';
 import { CMA_LOGO_BASE64 } from '../utils/logoBase64.js';
+import { LETTERHEAD_BASE64 } from '../utils/letterheadBase64.js';
 import {
   getAgmDueDate,
   daysUntil,
@@ -22,6 +27,11 @@ import {
   tdStatusStyle,
   thActionsStyle,
   tdActionsStyle,
+  getDetailedRenewalStatusText,
+  formatDisplayDate,
+  formatOrdinalDate,
+  StatusPill,
+  ActionBtn,
 } from '../components/mc-management/MCManagementShared.jsx';
 
 // NOTE: This page is intentionally aligned with MCManagement UI/UX.
@@ -38,6 +48,7 @@ const theme = {
   green: '#16a34a',
   red: '#dc2626',
   blue: '#2563eb',
+  orange: '#f59e0b',
 };
 
 const MCOM_EXPORT_FIELDS = [
@@ -164,60 +175,9 @@ const COL_WIDTHS = {
   'ACTIONS': 210,
 };
 
-function StatusPill({ status, renewalStatus }) {
-  const s = String(status || '').toLowerCase().trim();
-  const isOpen = s.includes('open');
-  const isPending = s.includes('pending') || s === 'pending';
-  const isClose = s.includes('close');
-  const isNew = s.includes('new');
 
-  const bg = isOpen ? '#eff6ff' : isPending ? '#fff7ed' : isClose ? '#fef2f2' : isNew ? '#f0fdf4' : '#eff6ff';
-  const color = isOpen ? theme.blue : isPending ? '#b45309' : isClose ? theme.red : isNew ? theme.green : theme.blue;
-  const border = isOpen ? '#bfdbfe' : isPending ? '#fed7aa' : isClose ? '#fecaca' : isNew ? '#bbf7d0' : '#bfdbfe';
-  const dotBg = isOpen ? '#2563eb' : isPending ? '#ea580c' : isClose ? '#dc2626' : isNew ? '#16a34a' : '#2563eb';
 
-  const isApproved = renewalStatus === 'Approved';
 
-  let approvalElement = null;
-  if (s === 'pending') {
-    approvalElement = (
-      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: '#475569', whiteSpace: 'nowrap', marginTop: 1 }}>
-        <i className="fas fa-hourglass-half" style={{ color: '#d97706', fontSize: 11 }} /> Waiting AGM Approval
-      </div>
-    );
-  } else if (renewalStatus === 'Pending Approval') {
-    approvalElement = (
-      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: '#475569', whiteSpace: 'nowrap', marginTop: 1 }}>
-        <i className="fas fa-clock" style={{ color: '#ea580c', fontSize: 11 }} /> Renewal Pending
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 8px', borderRadius: 999, background: bg, border: `1px solid ${border}`, color, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap' }}>
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotBg }} />
-          {status || '—'}
-        </span>
-        {isApproved && (
-          <span style={{ display: 'inline-flex', alignItems: 'center', color: '#16a34a', fontSize: 14 }} title="Renewal Approved">
-            <i className="fas fa-check-circle" />
-          </span>
-        )}
-      </div>
-      {approvalElement}
-    </div>
-  );
-}
-
-function ActionBtn({ icon, color, title, onClick }) {
-  return (
-    <button onClick={onClick} title={title} style={{ background: 'none', border: 'none', cursor: 'pointer', color, width: 20, minWidth: 20, height: 20, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, padding: 0, flexShrink: 0 }}>
-      <i className={icon} />
-    </button>
-  );
-}
 
 function FormField({ label, value, onChange, type = 'text', span2 }) {
   const inputId = 'mcom_form_' + String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
@@ -394,25 +354,32 @@ const MCOM_OLD_BRACKET_PRE2023 = [
   { maxUnits: 10, minUnits: 1, fee: 1000 },
 ];
 
-function getMcomFeeForYear(units, year, isGov, settings) {
+function getMcomFeeForYear(units, year, isGov, settings, mc) {
   const u = parseInt(units) || 0;
   const rates2023 = settings?.mcom_rates_2023 || MCOM_RENEWAL_RATES_2023;
   const ratesPre2023 = settings?.mcom_rates_pre2023 || MCOM_OLD_BRACKET_PRE2023;
 
+  const isNhda = String(mc?.mc_mcom || '').toUpperCase().includes('NHDA')
+    || String(mc?.category || '').toLowerCase().includes('nhda')
+    || String(mc?.file_no || '').toUpperCase().includes('NHDA')
+    || String(mc?.old_file_no || '').toUpperCase().includes('NHDA')
+    || String(mc?.new_file_no || '').toUpperCase().includes('NHDA');
+
   if (year < 2023) {
-    if (isGov) return 250;
+    if (isNhda || isGov) return settings?.mcom_gov_nhda_pre2023_rate ?? 250;
     const match = ratesPre2023.find(r => u >= r.minUnits && (r.maxUnits === null || u <= r.maxUnits));
     return match ? match.fee : 250;
   }
+
   const match = rates2023.find(r => u >= r.minUnits && (r.maxUnits === null || u <= r.maxUnits));
   return match ? match.fee : 250;
 }
 
 function getMcomAnnualFeeInfo(mc, settings) {
   const units = parseInt(mc?.units) || 0;
-  const currentYear = new Date().getFullYear();
+  const currentYear = getServerDate().getFullYear();
   const isGov = String(mc?.mc_mcom || '').toUpperCase().includes('GOV') || String(mc?.category || '').toLowerCase().includes('government');
-  const feePerYear = getMcomFeeForYear(units, currentYear, isGov, settings);
+  const feePerYear = getMcomFeeForYear(units, currentYear, isGov, settings, mc);
   return { units, feePerYear };
 }
 
@@ -421,42 +388,71 @@ function getRenewalAmountInfo(mc, settings) {
   return { annual: feePerYear, monthly: feePerYear / 12 };
 }
 
-function buildMcomMultiYearRows(mc, settings) {
+function buildMcomMultiYearRows(mc, settings, overrideEndYear = null) {
   const units = parseInt(mc?.units) || 0;
-  const currentYear = new Date().getFullYear();
+  const currentYear = getServerDate().getFullYear();
   const isGov = String(mc?.mc_mcom || '').toUpperCase().includes('GOV') || String(mc?.category || '').toLowerCase().includes('government');
+  const isNhda = String(mc?.mc_mcom || '').toUpperCase().includes('NHDA')
+    || String(mc?.category || '').toLowerCase().includes('nhda')
+    || String(mc?.file_no || '').toUpperCase().includes('NHDA')
+    || String(mc?.old_file_no || '').toUpperCase().includes('NHDA')
+    || String(mc?.new_file_no || '').toUpperCase().includes('NHDA');
 
-  let startYear = currentYear;
-  const rawPeriod = mc?.renewal_period;
-  if (rawPeriod) {
-    const periodStr = String(rawPeriod).trim();
-    const yearMatches = periodStr.match(/\b(19|20)\d{2}\b/g);
-    if (yearMatches && yearMatches.length > 0) {
-      startYear = parseInt(yearMatches[yearMatches.length - 1]) + 1;
-    } else if (/^\d{4}$/.test(periodStr)) {
-      startYear = parseInt(periodStr) + 1;
+  // ── Determine the effective "last paid year" ─────────────────────────────
+  // Check renewal_paid_year first, then renewal_paid_years CSV, then renewal_period text.
+  function getEffectivePaidYear() {
+    if (mc?.renewal_paid_year) {
+      const y = parseInt(mc.renewal_paid_year);
+      if (!isNaN(y) && y > 1990) return y;
     }
-  } else if (mc?.reg_date) {
-    const d = new Date(mc.reg_date);
-    if (!Number.isNaN(d.getTime())) startYear = d.getFullYear();
+    if (mc?.renewal_paid_years) {
+      const ys = String(mc.renewal_paid_years).split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y) && y > 1990);
+      if (ys.length > 0) return Math.max(...ys);
+    }
+    return null;
   }
 
-  const paidYear = mc?.renewal_paid_year ? parseInt(mc.renewal_paid_year) : null;
-  if (paidYear && paidYear >= startYear) startYear = paidYear + 1;
+  const effectivePaidYear = getEffectivePaidYear();
 
-  const endYear = currentYear;
+  // ── If payment is approved/pending AND covers the current year → no dues ──
+  // Return empty rows to show "up to date" in the modal (prevents "2027" row).
+  if (effectivePaidYear !== null && effectivePaidYear >= currentYear) {
+    if (mc?.renewal_payment_status === 'Approved' || mc?.renewal_payment_status === 'Pending Approval') {
+      return [];
+    }
+  }
 
-  if (startYear > endYear) return [];
+  let startYear = currentYear;
+  if (mc?.reg_date) {
+    // Attempt to extract year from "YYYY-MM-DD" or similar formats
+    const yearMatch = String(mc.reg_date).trim().match(/^(\d{4})/);
+    if (yearMatch) {
+      startYear = parseInt(yearMatch[1], 10);
+    } else {
+      const d = new Date(mc.reg_date);
+      if (!Number.isNaN(d.getTime())) startYear = d.getFullYear();
+    }
+    // Advance to the year after registration
+    startYear++;
+  }
+
+  // Advance startYear past any already-paid years
+  if (effectivePaidYear && effectivePaidYear >= startYear) startYear = effectivePaidYear + 1;
+
+  // Only generate rows up to and including the end year (never future years unless overridden)
+  const endYear = overrideEndYear || currentYear;
+  if (startYear > endYear) return []; // All paid up
 
   const ssclRate = settings?.sscl_rate ?? 0.025;
   const vatRate = settings?.vat_rate ?? 0.18;
   const rows = [];
   for (let year = startYear; year <= endYear; year++) {
-    const fee = getMcomFeeForYear(units, year, isGov, settings);
+    const fee = getMcomFeeForYear(units, year, isGov, settings, mc);
     const sscl = parseFloat((fee * ssclRate).toFixed(2));
     const vat = parseFloat(((fee + sscl) * vatRate).toFixed(2));
     const total = parseFloat((fee + sscl + vat).toFixed(2));
-    rows.push({ year, units, fee, sscl, vat, total, isGov });
+    const showUnits = (year < 2023 && (isGov || isNhda)) ? '-' : units;
+    rows.push({ year, units: showUnits, fee, sscl, vat, total, isGov });
   }
   return rows;
 }
@@ -468,17 +464,9 @@ function getRenewalDueDate(mc) {
   const baseDate = new Date(base);
   if (Number.isNaN(baseDate.getTime())) return null;
 
-  let dueYear = baseDate.getFullYear();
-  let due = new Date(dueYear, 11, 31);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  let due = new Date(baseDate.getFullYear(), 11, 31);
   due.setHours(0, 0, 0, 0);
 
-  while (due < today) {
-    dueYear += 1;
-    due = new Date(dueYear, 11, 31);
-    due.setHours(0, 0, 0, 0);
-  }
   return due;
 }
 
@@ -641,10 +629,29 @@ export default function MComManagement({ currentUser }) {
     ? `${currentUser.name} (${currentUser.username})`
     : currentUser?.name || currentUser?.username || '';
 
+  const isAGM = String(currentUser?.role || '').trim().toUpperCase() === 'AGM';
+  const canEdit = hasPermission(currentUser, 'mcom', 'edit');
+  const canDelete = hasPermission(currentUser, 'mcom', 'delete');
+  const canCreate = hasPermission(currentUser, 'mcom', 'create');
+  const canApprove = hasPermission(currentUser, 'mcom', 'approve') || isAGM;
+  const canViewRecord = hasPermission(currentUser, 'mcom', 'view_record');
+  const canHistory = hasPermission(currentUser, 'mcom', 'history');
+  const canRenewal = hasPermission(currentUser, 'mcom', 'renewal');
+
   const [mcs, setMcs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isImporting, setIsImporting] = useState(false);
+
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [mcToReject, setMcToReject] = useState(null);
 
   const [searchTerm, setSearchTerm] = useState(() => {
+    const nav = localStorage.getItem('cma_mcom_navigate_search');
+    if (nav) {
+      localStorage.removeItem('cma_mcom_navigate_search');
+      return nav;
+    }
     return sessionStorage.getItem('cma_mcom_searchTerm') || '';
   });
   const [statusFilter, setStatusFilter] = useState(() => {
@@ -675,6 +682,7 @@ export default function MComManagement({ currentUser }) {
   });
   const pageSize = viewAll ? 999999 : pageSizeDefault;
   const [totalCount, setTotalCount] = useState(0);
+  const [globalStats, setGlobalStats] = useState([]);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [viewModalOpen, setViewModalOpen] = useState(false);
@@ -695,6 +703,38 @@ export default function MComManagement({ currentUser }) {
   const [renewalRecord, setRenewalRecord] = useState(null);
   const [markingRenewalPaid, setMarkingRenewalPaid] = useState(false);
   const [selectedRenewalYears, setSelectedRenewalYears] = useState([]);
+  const [manualPaidYears, setManualPaidYears] = useState('');
+
+  // - Acknowledgement letter (NEW) -
+  const [ackModalOpen, setAckModalOpen] = useState(false);
+  const [printingAck, setPrintingAck] = useState(false);
+  const [emailPreview, setEmailPreview] = useState(null);
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [ackOverrides, setAckOverrides] = useState({
+    refNo: '',
+    date: getServerDate().toISOString().slice(0, 10),
+    year: '',
+    yearFrom: '',
+    yearTo: '',
+    amount: '0.00',
+    paidDate: getServerDate().toISOString().slice(0, 10),
+    signName: 'Samantha Ampagala',
+    signTitle1: 'Assistant General Manager (Customer Care) ',
+    signTitle2: 'Condominium Management Authority',
+    toEmail: ''
+  });
+  // - Renewal covering letter edit overrides -
+  const [rlOverrides, setRlOverrides] = useState({
+    refNo: '',
+    date: getServerDate().toISOString().slice(0, 10),
+    signName: 'Arct.M.T. Kapila Priyantha',
+    signTitle1: 'General Manager',
+    signTitle2: 'Condominium Management Authority',
+  });
+  const [rlDefaultOverrides, setRlDefaultOverrides] = useState(null); // for undo
+  const [rlLetterModalOpen, setRlLetterModalOpen] = useState(false);
+  const [rlLetterRecord, setRlLetterRecord] = useState(null); // { mc, multiRows }
+  const [rlSaved, setRlSaved] = useState(false);
 
   // --- Renewal & AGM Reminders ---
   const [reminderMcs, setReminderMcs] = useState([]);
@@ -779,13 +819,13 @@ export default function MComManagement({ currentUser }) {
   }, [renewalReminders.length]);
 
   const stats = useMemo(() => {
-    const total = totalCount;
-    const active = mcs.filter((r) => String(r.status).toLowerCase() === 'active').length;
-    // M.Com requested statuses are New/Open/Pending/Close, so keep simple:
-    const open = mcs.filter((r) => String(r.status).toLowerCase() === 'open').length;
-    const pending = mcs.filter((r) => String(r.status).toLowerCase() === 'pending').length;
-    return { total, active: open, inactive: total - open, pending };
-  }, [mcs, totalCount]);
+    const dataSource = globalStats.length > 0 ? globalStats : mcs;
+    const active = dataSource.filter((r) => String(r.status).toLowerCase().trim() === 'active').length;
+    const inactive = dataSource.filter((r) => String(r.status).toLowerCase().trim() === 'non active').length;
+    const pending = dataSource.filter((r) => String(r.status).toLowerCase().trim() === 'pending').length;
+    const total = dataSource.length;
+    return { total, active, inactive, pending };
+  }, [mcs, globalStats]);
 
   const filtered = mcs || [];
 
@@ -799,7 +839,7 @@ export default function MComManagement({ currentUser }) {
         month: monthFilter || undefined,
         category: categoryFilter || undefined,
         status: statusFilter || undefined,
-        q: searchTerm || undefined,
+        q: searchTerm ? searchTerm.trim() : undefined,
         page: viewAll ? 1 : page,
         limit: pageSize,
       });
@@ -808,6 +848,13 @@ export default function MComManagement({ currentUser }) {
       const rows = data?.rows ?? [];
       setMcs(rows);
       setTotalCount(data?.total ?? 0);
+
+      const allDataRes = await fetch(`${API_BASE}/mcom?limit=999999&page=1`);
+      const allData = await allDataRes.json();
+      setGlobalStats(allData?.rows || []);
+
+    } catch (err) {
+      // stats fetch failed — silently ignore, cards will show last known values
     } finally {
       setLoading(false);
     }
@@ -923,7 +970,7 @@ export default function MComManagement({ currentUser }) {
 
   async function markRenewalPaid(mc, multiRows) {
     const grandTotal = multiRows.reduce((s, r) => s + r.total, 0);
-    const endYear = multiRows.length > 0 ? multiRows[multiRows.length - 1].year : new Date().getFullYear();
+    const endYear = multiRows.length > 0 ? multiRows[multiRows.length - 1].year : getServerDate().getFullYear();
 
     const confirmed = await confirm({
       title: 'Record Renewal Payment',
@@ -936,14 +983,27 @@ export default function MComManagement({ currentUser }) {
 
     setMarkingRenewalPaid(true);
     try {
+      const existingPaidYears = mc.renewal_paid_years ? mc.renewal_paid_years.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y)) : [];
+      let newPaidYears = manualPaidYears ? manualPaidYears.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y)) : (multiRows.length > 0 ? multiRows.map(r => r.year) : [endYear]);
+      const combinedYears = Array.from(new Set([...existingPaidYears, ...newPaidYears])).sort((a, b) => a - b);
+      const latestYear = combinedYears.length > 0 ? combinedYears[combinedYears.length - 1] : endYear;
+
+      const isActive = latestYear >= getServerDate().getFullYear();
+      const targetStatus = isActive ? 'Active' : 'Non Active';
+
       const payload = {
         renewal_paid: true,
-        renewal_paid_date: new Date().toISOString().slice(0, 10),
+        renewal_paid_date: getServerDate().toISOString().slice(0, 10),
         renewal_paid_amount: parseFloat(grandTotal.toFixed(2)),
-        renewal_paid_year: endYear,
+        renewal_paid_year: latestYear,
+        renewal_paid_years: combinedYears.join(', '),
         renewal_payment_status: 'Pending Approval',
-        next_renewal_date: `${endYear + 1}-01-01`,
+        renewal_period: latestYear.toString(),
+        next_renewal_date: `${latestYear}-12-31`,  // Valid until Dec 31 of the latest paid year
         modified_by: auditUserLabel || 'system',
+        active_non_active: targetStatus,
+        renewal_date_vise: targetStatus,
+        status: 'Pending',
       };
       const r = await fetch(`${API_BASE}/mcom/${mc.id}`, {
         method: 'PATCH',
@@ -961,7 +1021,7 @@ export default function MComManagement({ currentUser }) {
           title: 'M.Com Renewal Payment Pending Approval',
           message: `Renewal payment of Rs. ${Number(grandTotal || 0).toLocaleString('en-LK', { minimumFractionDigits: 2 })} for ${mc.management_corporation_name || mc.name || 'M.Com'} (File No: ${mc.new_file_no || mc.file_no || '-'}) has been recorded by ${auditUserLabel}. Please review and approve.`,
           target_role: 'AGM',
-          link: `mcom:${mc.id}`,
+          link: `mcom-renewal:${mc.id}`,
         }),
       }).catch(() => { });
 
@@ -975,16 +1035,34 @@ export default function MComManagement({ currentUser }) {
     }
   }
 
-  async function approveRenewalPayment(mc) {
+  async function approveRenewalPayment(mc, transactionRows) {
+    const confirmed = await confirm({
+      title: 'Approve Renewal Payment',
+      message: `Are you sure you want to approve this renewal payment? This will generate the Acknowledgement letter.`,
+      confirmLabel: 'Approve',
+      cancelLabel: 'Cancel',
+    });
+    if (!confirmed) return;
+
     setMarkingRenewalPaid(true);
     try {
-      const ackNo = `ACK/MCOM/${mc.new_file_no || mc.file_no || mc.id}/${new Date().getFullYear()}`;
+      const year = mc.renewal_paid_year || getServerDate().getFullYear();
+      const isActive = year >= getServerDate().getFullYear();
+      const targetStatus = isActive ? 'Active' : 'Non Active';
+      const ackNo = `ACK/MCOM/${mc.new_file_no || mc.file_no || mc.id}/${year}`;
       const payload = {
         renewal_payment_status: 'Approved',
         acknowledgement_no: ackNo,
-        acknowledgement_date: new Date().toISOString().slice(0, 10),
+        acknowledgement_date: getServerDate().toISOString().slice(0, 10),
         renewal_paid: true,
         modified_by: auditUserLabel || 'system',
+        renewal_status: targetStatus,
+        renewal_date_vise: targetStatus,
+        active_non_active: targetStatus,
+        status: targetStatus,
+        renewal_period: year.toString(),
+        next_renewal_date: `${year}-12-31`  // Valid until Dec 31 of the paid year
+
       };
       const r = await fetch(`${API_BASE}/mcom/${mc.id}`, {
         method: 'PATCH',
@@ -1002,13 +1080,35 @@ export default function MComManagement({ currentUser }) {
           title: 'M.Com Renewal Payment Approved',
           message: `Renewal payment for ${mc.management_corporation_name || mc.name || 'M.Com'} (File No: ${mc.new_file_no || mc.file_no || '-'}) has been approved by the AGM. Acknowledgement No: ${ackNo}. You can now download the Acknowledgement letter.`,
           target_role: 'MA',
-          link: `mcom:${mc.id}`,
+          link: `mcom-renewal:${mc.id}`,
         }),
       }).catch(() => { });
 
       showToast('Renewal payment approved successfully');
       setRenewalModalOpen(false);
       await load();
+
+      const yearsList = transactionRows ? transactionRows.map(r => r.year) : [];
+      const startPaidYear = yearsList.length > 0 ? Math.min(...yearsList) : (mc.renewal_paid_year || getServerDate().getFullYear());
+      const endPaidYear = mc.renewal_paid_year || (yearsList.length > 0 ? Math.max(...yearsList) : getServerDate().getFullYear());
+
+      // Open Acknowledgement Modal
+      setAckOverrides({
+        refNo: mc.new_file_no || mc.file_no || ackNo,
+        date: getServerDate().toISOString().slice(0, 10),
+        year: String(endPaidYear),
+        yearFrom: String(startPaidYear),
+        yearTo: String(endPaidYear),
+        amount: mc.renewal_paid_amount ? Number(mc.renewal_paid_amount).toLocaleString('en-LK', { minimumFractionDigits: 2 }) : '0.00',
+        paidDate: mc.renewal_paid_date || getServerDate().toISOString().slice(0, 10),
+        signName: 'Samantha Ampagala',
+        signTitle1: 'Assistant General Manager (Customer Care) ',
+        signTitle2: 'Condominium Management Authority',
+        toEmail: mc.email_address || mc.secretary_email || ''
+      });
+      const updatedMc = { ...mc, ...payload };
+      setViewRecord(updatedMc);
+      setAckModalOpen(true);
     } catch (e) {
       showToast(e.message || 'Failed to approve', 'error');
     } finally {
@@ -1016,7 +1116,488 @@ export default function MComManagement({ currentUser }) {
     }
   }
 
-  function printRenewalLetter(mc, multiRows) {
+  async function rejectRenewalPayment(mc, reason) {
+    if (!mc || !mc.id) return;
+    setMarkingRenewalPaid(true);
+    try {
+      const payload = {
+        renewal_paid: false,
+        renewal_payment_status: 'Rejected',
+        renewal_rejection_reason: reason,
+        status: 'Non Active',
+        renewal_date_vise: 'Non Active',
+        active_non_active: 'Non Active'
+      };
+      const r = await fetch(`${API_BASE}/mcom/${mc.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || 'Failed to reject payment');
+
+      fetch(`${API_BASE}/notifications`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'error',
+          title: 'M.Com Renewal Payment Rejected',
+          message: `Renewal payment for ${mc.management_corporation_name || mc.name || 'M.Com'} (File No: ${mc.new_file_no || mc.file_no || '-'}) was rejected by AGM. Reason: ${reason}. Please review and re-submit.`,
+          target_role: 'MA',
+          link: `mcom-renewal:${mc.id}`,
+        }),
+      }).catch(() => { });
+
+      showToast('Renewal payment rejected.');
+      setRenewalModalOpen(false);
+      await load();
+    } catch (e) {
+      showToast(e.message || 'Failed to reject payment', 'error');
+    } finally {
+      setMarkingRenewalPaid(false);
+    }
+  }
+
+  const formatDotDate = (dStr) => {
+    if (!dStr) return '';
+    const d = new Date(dStr);
+    if (isNaN(d)) return dStr;
+    const day = String(d.getDate()).padStart(2, '0');
+    const mo = String(d.getMonth() + 1).padStart(2, '0');
+    return `${day}.${mo}.${d.getFullYear()}`;
+  };
+
+  const escapeHtml = (unsafe) => {
+    return (unsafe || '').toString()
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  };
+
+  function renderAcknowledgementLetter(mc) {
+    if (!mc) return null;
+    const addressLines = String(mc.address || '')
+      .split(/\r?\n|,/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const ackYearFrom = ackOverrides.yearFrom || ackOverrides.year;
+    const ackYearTo = ackOverrides.yearTo || ackOverrides.year;
+    const isMultiYearAck = ackYearFrom && ackYearTo && String(ackYearFrom) !== String(ackYearTo);
+
+    return (
+      <div className="official-letter" id="ack-letter-content-render">
+        <div className="ol-ref" style={{ overflow: 'hidden', marginBottom: '25px' }}>
+          <span contentEditable suppressContentEditableWarning style={{ float: 'left' }}>{ackOverrides.refNo}</span>
+          <span contentEditable suppressContentEditableWarning style={{ float: 'right' }}>{formatDotDate(ackOverrides.date)}</span>
+        </div>
+
+        <div className="ol-addr" contentEditable suppressContentEditableWarning>
+          <div>The Secretary,</div>
+          <div>The Management Committee</div>
+          {(() => {
+            const n = mc.management_corporation_name || mc.name || '-';
+            if (n.includes(' - ')) {
+              const idx = n.indexOf(' - ');
+              return (
+                <>
+                  <div>{n.substring(0, idx)}</div>
+                  <div>{n.substring(idx + 3)}</div>
+                </>
+              );
+            }
+            return <div>&quot;{n}&quot;</div>;
+          })()}
+          {addressLines.map((line, i) => <div key={i}>{line},</div>)}
+        </div>
+
+        <p className="ol-para" contentEditable suppressContentEditableWarning>Dear Sir/Madam,</p>
+
+        <div className="ol-title" contentEditable suppressContentEditableWarning style={{ fontWeight: 'bold', textDecoration: 'underline' }}>
+          RENEWAL OF REGISTRATION OF THE MANAGEMENT COMMITTEE<br />
+          {isMultiYearAck
+            ? `(01 January ${ackYearFrom} – 31 December ${ackYearTo})`
+            : `(01 January ${ackYearTo} – 31 December ${ackYearTo})`
+          }
+        </div>
+
+        <p className="ol-para" contentEditable suppressContentEditableWarning>
+          We acknowledge with thanks the receipt of the Management Committee Registration Renewal Fee amounting to Rs. {ackOverrides.amount}, which was received on <span style={{ whiteSpace: 'nowrap' }}>{formatOrdinalDate(ackOverrides.paidDate)}</span>.
+        </p>
+
+        <p className="ol-para" contentEditable suppressContentEditableWarning>
+          Accordingly, the registration of the Management Committee has been renewed and is valid until <span style={{ whiteSpace: 'nowrap' }}>31<sup>st</sup> December {ackYearTo}</span>. Please note that the registration shall be renewed annually.
+        </p>
+
+        <p className="ol-para" contentEditable suppressContentEditableWarning>Thank you.</p>
+        <p className="ol-para" contentEditable suppressContentEditableWarning>Yours faithfully,</p>
+
+        <div className="ol-sign" contentEditable suppressContentEditableWarning>
+          <div>{ackOverrides.signName}</div>
+          <div><strong>{ackOverrides.signTitle1}</strong></div>
+          <div><strong>{ackOverrides.signTitle2}</strong></div>
+        </div>
+      </div>
+    );
+  }
+
+  function printAcknowledgement() {
+    if (!viewRecord) return;
+    const renderedContent = document.getElementById('ack-letter-content-render');
+    let html = '';
+    if (renderedContent) {
+      html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Acknowledgement Letter - ${escapeHtml(viewRecord.acknowledgement_no || '')}</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 0; font-family: 'Times New Roman', serif; color: #111; background: #fff; }
+  .doc-page { padding: 15mm; min-height: 100vh; }
+  .official-letter { max-width: 680px; margin: 0 auto; padding-top: 2.2in; font-family: 'Times New Roman', serif; font-size: 16px; line-height: 1.6; }
+  .ol-ref { display: flex; justify-content: space-between; margin-bottom: 25px; }
+  .ol-addr { margin-bottom: 25px; }
+  .ol-addr div { margin: 3px 0; }
+  .ol-title { font-weight: 700; text-decoration: underline; margin: 25px 0; line-height: 1.4; text-align: left; }
+  .ol-para { margin: 20px 0; text-align: justify; }
+  .ol-sign { margin-top: 40px; page-break-inside: avoid; break-inside: avoid; }
+  .ol-sign div { margin: 2px 0; }
+  .ol-sign-space { height: 60px; }
+</style>
+</head>
+<body>
+  <div class="doc-page">
+    <div class="official-letter">
+      ${renderedContent.innerHTML}
+    </div>
+  </div>
+  <script>
+    window.addEventListener('load', function() {
+      setTimeout(function() {
+        window.focus();
+        window.print();
+      }, 500);
+    });
+  </script>
+</body>
+</html>`;
+    }
+
+    const blob = new Blob([html], { type: 'text/html' });
+    const blobUrl = URL.createObjectURL(blob);
+
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.src = blobUrl;
+    document.body.appendChild(iframe);
+
+    // The HTML itself contains a script that calls window.print() after 500ms.
+    // We just clean up the hidden iframe after 10 seconds.
+    setTimeout(() => {
+        if (document.body.contains(iframe)) {
+            document.body.removeChild(iframe);
+        }
+        URL.revokeObjectURL(blobUrl);
+    }, 10000);
+  }
+
+  async function emailAcknowledgement() {
+    if (!viewRecord) return;
+
+    const mc = viewRecord;
+    const overrides = ackOverrides || {};
+    let toEmail = overrides.toEmail || mc.email_address || mc.secretary_email || '';
+    if (!toEmail) {
+      showToast('No email address found. Please enter a recipient email.', 'error');
+      return;
+    }
+
+    const fileNo = mc.new_file_no || mc.file_no || '';
+    const mcName = mc.management_corporation_name || mc.name || '';
+    const subject = `Acknowledgement Letter - ${fileNo}`;
+
+    showToast('Generating PDF and sending email...', 'info');
+
+    try {
+      const addressLines = String(mc.address || '').split(/\r?\n|,/).map((l) => l.trim()).filter(Boolean);
+      const ackYearFrom = overrides.yearFrom || overrides.year || getServerDate().getFullYear();
+      const ackYearTo = overrides.yearTo || overrides.year || getServerDate().getFullYear();
+      const isMultiYear = String(ackYearFrom) !== String(ackYearTo);
+      const yearRangeStr = isMultiYear
+        ? `(01 January ${ackYearFrom} - 31 December ${ackYearTo})`
+        : `(01 January ${ackYearTo} - 31 December ${ackYearTo})`;
+      const displayRefNo = overrides.refNo || (String(mc.new_file_no || mc.file_no || '').startsWith('CMA/') ? (mc.new_file_no || mc.file_no || '') : `CMA/CCU/12/MCOM/${mc.new_file_no || mc.file_no || ''}`);
+      const letterAmount = overrides.amount || '-';
+      const letterPaidDate = overrides.paidDate ? formatOrdinalDate(overrides.paidDate) : '-';
+      const letterDate = overrides.date ? formatDotDate(overrides.date) : formatDotDate(getServerDate().toISOString().slice(0, 10));
+      const signName = overrides.signName || 'Samantha Ampagala';
+      const signTitle1 = overrides.signTitle1 || 'Assistant General Manager (Customer Care)';
+      const signTitle2 = overrides.signTitle2 || 'Condominium Management Authority';
+      const mcName2 = mcName || '-';
+
+      const { jsPDF } = await import('jspdf');
+      const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+
+      const pageW = 210;
+      const left = 25;
+      const right = pageW - 25;
+      const lineH = 7;
+      const paraH = 10;
+      let y = 72;
+
+      const writeLine = (text, x, fontSize = 12, style = 'normal') => {
+        doc.setFont('times', style);
+        doc.setFontSize(fontSize);
+        doc.text(text, x, y);
+        y += lineH;
+      };
+      const writeWrapped = (text, fontSize = 12, style = 'normal', align = 'left') => {
+        doc.setFont('times', style);
+        doc.setFontSize(fontSize);
+        const lines = doc.splitTextToSize(text, right - left);
+        doc.text(lines, left, y, { align });
+        y += lines.length * lineH + 2;
+      };
+      const skip = (h = paraH) => { y += h; };
+
+      try {
+        doc.addImage(LETTERHEAD_BASE64, 'PNG', 0, 0, 210, 297);
+      } catch (err) {
+        console.warn('Letterhead image could not be loaded:', err);
+      }
+
+      doc.setFont('times', 'normal');
+      doc.setFontSize(12);
+      doc.text(displayRefNo, left, y);
+      doc.text(letterDate, right, y, { align: 'right' });
+      y += lineH;
+      skip(paraH);
+
+      writeLine('The Secretary,', left);
+      if (mcName2.includes(' - ')) {
+        const idx = mcName2.indexOf(' - ');
+        writeLine(mcName2.substring(0, idx), left);
+        writeLine(`${mcName2.substring(idx + 3)}`, left);
+      } else {
+        writeLine(`${mcName2}`, left);
+      }
+      addressLines.forEach((l) => writeLine(`${l}`, left));
+      skip(paraH);
+
+      writeLine('Dear Sir/Madam,', left);
+      skip(paraH);
+
+      doc.setFont('times', 'bold');
+      doc.setFontSize(12);
+      doc.setLineWidth(0.3);
+      const subjectLine1 = 'RENEWAL OF REGISTRATION OF THE MANAGEMENT COMMITTEE';
+      const subjectLine2 = yearRangeStr;
+
+      const sl1w = doc.getTextWidth(subjectLine1);
+      doc.text(subjectLine1, left, y);
+      doc.line(left, y + 0.8, left + sl1w, y + 0.8);
+      y += lineH;
+
+      const sl2w = doc.getTextWidth(subjectLine2);
+      doc.text(subjectLine2, left, y);
+      doc.line(left, y + 0.8, left + sl2w, y + 0.8);
+      y += lineH;
+      skip(paraH);
+
+      writeWrapped(
+        `We acknowledge with thanks the receipt of the Management Committee Registration Renewal Fee amounting to Rs. ${letterAmount}, which was received on ${letterPaidDate}.`
+      );
+      skip(4);
+      writeWrapped(
+        `Accordingly, the registration of the Management Committee has been renewed and is valid until 31st December ${ackYearTo}. Please note that the registration shall be renewed annually.`
+      );
+      skip(4);
+      writeLine('Thank you.', left);
+      skip(4);
+      writeLine('Yours faithfully,', left);
+      skip(20);
+
+      writeLine(signName, left, 12, 'normal');
+      doc.setFont('times', 'bold');
+      doc.setFontSize(12);
+      doc.text(signTitle1, left, y); y += lineH;
+      doc.text(signTitle2, left, y); y += lineH;
+
+      const safeFileNo = fileNo.replace(/[/\\: ]/g, '_');
+      const pdfFileName = `Acknowledgement_${safeFileNo}.pdf`;
+
+      const pdfDataUri = doc.output('datauristring');
+      const pdfBase64 = pdfDataUri.split(',')[1];
+
+      const htmlBody = `
+              <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                  <div style="background-color: #1a3a6b; color: white; padding: 20px; text-align: center;">
+                      <img src="${CMA_LOGO_BASE64}" alt="CMA Logo" style="height: 65px; margin-bottom: 12px; display: inline-block; background-color: white; border-radius: 50%; padding: 4px;" />
+                      <h2 style="margin: 0; font-size: 20px;">Condominium Management Authority</h2>
+                      <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.8;">Acknowledgement of Registration Renewal</p>
+                  </div>
+                  <div style="padding: 24px; background-color: #ffffff;">
+                      <p>Dear Sir/Madam,</p>
+                      <p>Please find attached the official Acknowledgement of Registration Renewal for <strong>${mcName}</strong> (File No: ${fileNo}).</p>
+                      <p>This is an automated email. Please do not reply directly to this message.</p>
+                      <div style="margin-top: 30px; border-top: 1px solid #cbd5e1; padding-top: 15px; font-size: 12px; color: #64748b;">
+                          <p style="margin: 0;">Customer Care Unit</p>
+                          <p style="margin: 2px 0 0 0;">Condominium Management Authority</p>
+                      </div>
+                  </div>
+              </div>
+          `;
+
+      // Show Preview Modal instead of sending immediately
+      setEmailPreview({
+        toEmail,
+        subject,
+        htmlBody,
+        pdfBase64,
+        pdfFileName
+      });
+
+    } catch (error) {
+      console.error('Email preparation error:', error);
+      showToast('Failed to prepare email: ' + error.message, 'error');
+    }
+  }
+
+  async function confirmSendEmail() {
+    if (!emailPreview) return;
+    setSendingEmail(true);
+    try {
+      const response = await fetch(`${API_BASE}/send-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(emailPreview)
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Failed to send email');
+
+      showToast('Email sent successfully! ✅');
+      setEmailPreview(null);
+    } catch (error) {
+      console.error('Email sending error:', error);
+      showToast('Failed to send email: ' + error.message, 'error');
+    } finally {
+      setSendingEmail(false);
+    }
+  }
+
+  // ── Renewal Letter helpers (MCom) ───────────────────────────────────────────
+  function getMComRlStorageKey(mc) {
+    return `mcom_rl_overrides_${mc?.new_file_no || mc?.file_no || mc?.id || 'default'}`;
+  }
+
+  function loadMComRlOverrides(mc) {
+    try {
+      const saved = localStorage.getItem(getMComRlStorageKey(mc));
+      if (saved) return JSON.parse(saved);
+    } catch { }
+    return null;
+  }
+
+  function saveMComRlOverrides(mc, overrides) {
+    try {
+      localStorage.setItem(getMComRlStorageKey(mc), JSON.stringify(overrides));
+    } catch { }
+  }
+
+  function openRlLetterModal(mc, multiRows) {
+    if (!mc) return;
+    const saved = loadMComRlOverrides(mc);
+    const fileNo = mc.new_file_no || mc.file_no || mc.old_file_no || '';
+
+    // Calculate defaults
+    const grandTotal = Array.isArray(multiRows) ? multiRows.reduce((s, r) => s + (r.total || 0), 0) : 0;
+    const firstYear = Array.isArray(multiRows) && multiRows.length > 0 ? multiRows[0].year : getServerDate().getFullYear();
+    const lastYear = Array.isArray(multiRows) && multiRows.length > 0 ? multiRows[multiRows.length - 1].year : getServerDate().getFullYear();
+    const prevYear = firstYear - 1;
+    const fmt = (n) => (n != null ? Number(n).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-');
+
+    const defaultBodyParagraph1 = `The Registration of your Management Committee has been expired on 31.12.${prevYear}. Therefore, please make arrangements to renew the registration of your Management Committee up to 31.12.${lastYear}.`;
+    const defaultBodyParagraph2 = `Every management committee is required to pay the registration fees for the year before 31st March ${lastYear}. But since you have failed to pay the said fees so far, I hereby request you to take necessary steps to pay some of Rs. ${fmt(grandTotal)} as soon as possible with duly prepared application form (annex-01).`;
+
+    const preRows = Array.isArray(multiRows) ? multiRows.filter(r => r.year < 2023) : [];
+    const postRows = Array.isArray(multiRows) ? multiRows.filter(r => r.year >= 2023) : [];
+
+    const preFee = preRows.reduce((s, r) => s + (r.fee || 0), 0);
+    const preSscl = preRows.reduce((s, r) => s + (r.sscl || 0), 0);
+    const preVat = preRows.reduce((s, r) => s + (r.vat || 0), 0);
+    const preTotal = preRows.reduce((s, r) => s + (r.total || 0), 0);
+
+    const groupRows = (rows) => {
+      const groups = [];
+      let cur = null;
+      for (const r of rows) {
+        if (cur && cur.baseFee === r.fee && cur.units === r.units) {
+          cur.endYear = r.year;
+          cur.fee += r.fee || 0; cur.sscl += r.sscl || 0; cur.vat += r.vat || 0; cur.total += r.total || 0;
+          cur.count++;
+        } else {
+          cur = { ...r, startYear: r.year, endYear: r.year, count: 1, baseFee: r.fee };
+          groups.push(cur);
+        }
+      }
+      return groups;
+    };
+
+    const initialTableRows = [];
+    for (const g of groupRows(preRows)) {
+      initialTableRows.push({
+        isPre: true,
+        yearLabel: g.startYear === g.endYear ? String(g.startYear) : `${g.startYear}-${g.endYear}`,
+        units: g.units,
+        fee: g.fee,
+        sscl: g.sscl,
+        vat: g.vat,
+        total: g.total
+      });
+    }
+    for (const g of groupRows(postRows)) {
+      initialTableRows.push({
+        isPre: false,
+        yearLabel: g.startYear === g.endYear ? String(g.startYear) : `${g.startYear}-${g.endYear}`,
+        units: g.units,
+        fee: g.fee,
+        sscl: g.sscl,
+        vat: g.vat,
+        total: g.total
+      });
+    }
+
+    const finalOverrides = {
+      refNo: fileNo,
+      date: getServerDate().toISOString().slice(0, 10),
+      signName: 'Arct.M.T. Kapila Priyantha',
+      signTitle1: 'General Manager',
+      signTitle2: 'Condominium Management Authority',
+      bodyParagraph1: defaultBodyParagraph1,
+      bodyParagraph2: defaultBodyParagraph2,
+      tableRows: initialTableRows,
+      ...saved
+    };
+    if (!finalOverrides.bodyParagraph1) finalOverrides.bodyParagraph1 = defaultBodyParagraph1;
+    if (!finalOverrides.bodyParagraph2) finalOverrides.bodyParagraph2 = defaultBodyParagraph2;
+    if (!finalOverrides.tableRows || !finalOverrides.tableRows.length) finalOverrides.tableRows = initialTableRows;
+
+    setRlOverrides(finalOverrides);
+    setRlDefaultOverrides(finalOverrides);
+    setRlLetterRecord({ mc, multiRows });
+    setRlSaved(false);
+    setRlLetterModalOpen(true);
+  }
+
+  function printRenewalLetter(mc, multiRows, overrides) {
     const fmt = (n) => (n != null ? Number(n).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-');
     const formatDotDate = (dStr) => {
       if (!dStr) return '';
@@ -1027,34 +1608,62 @@ export default function MComManagement({ currentUser }) {
     const escapeHtml = (unsafe) => String(unsafe).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 
     const fileNo = escapeHtml(mc.new_file_no || mc.file_no || mc.old_file_no || '-');
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getServerDate().toISOString().slice(0, 10);
     const addressLines = String(mc.address || '').split(/\r?\n|,/).map((l) => l.trim()).filter(Boolean);
     const planNoStr = mc.plan_no ? ` Plan No. ${escapeHtml(mc.plan_no)},` : ',';
 
-    const preRows = multiRows.filter(r => r.year < 2023);
-    const postRows = multiRows.filter(r => r.year >= 2023);
+    const preRows = Array.isArray(multiRows) ? multiRows.filter(r => r.year < 2023) : [];
+    const postRows = Array.isArray(multiRows) ? multiRows.filter(r => r.year >= 2023) : [];
 
-    const preFee = preRows.reduce((s, r) => s + r.fee, 0);
-    const preSscl = preRows.reduce((s, r) => s + r.sscl, 0);
-    const preVat = preRows.reduce((s, r) => s + r.vat, 0);
-    const preTotal = preRows.reduce((s, r) => s + r.total, 0);
+    const preFee = preRows.reduce((s, r) => s + (r.fee || 0), 0);
+    const preSscl = preRows.reduce((s, r) => s + (r.sscl || 0), 0);
+    const preVat = preRows.reduce((s, r) => s + (r.vat || 0), 0);
+    const preTotal = preRows.reduce((s, r) => s + (r.total || 0), 0);
 
-    const postFee = postRows.reduce((s, r) => s + r.fee, 0);
-    const postSscl = postRows.reduce((s, r) => s + r.sscl, 0);
-    const postVat = postRows.reduce((s, r) => s + r.vat, 0);
-    const postTotal = postRows.reduce((s, r) => s + r.total, 0);
+    const postFee = postRows.reduce((s, r) => s + (r.fee || 0), 0);
+    const postSscl = postRows.reduce((s, r) => s + (r.sscl || 0), 0);
+    const postVat = postRows.reduce((s, r) => s + (r.vat || 0), 0);
+    const postTotal = postRows.reduce((s, r) => s + (r.total || 0), 0);
 
-    const grandTotal = multiRows.reduce((s, r) => s + r.total, 0);
-    const firstYear = multiRows.length > 0 ? multiRows[0].year : new Date().getFullYear();
-    const lastYear = multiRows.length > 0 ? multiRows[multiRows.length - 1].year : new Date().getFullYear();
+    const grandTotal = Array.isArray(multiRows) ? multiRows.reduce((s, r) => s + (r.total || 0), 0) : 0;
+    const firstYear = Array.isArray(multiRows) && multiRows.length > 0 ? multiRows[0].year : getServerDate().getFullYear();
+    const lastYear = Array.isArray(multiRows) && multiRows.length > 0 ? multiRows[multiRows.length - 1].year : getServerDate().getFullYear();
     const prevYear = firstYear - 1;
+    const periodLabel = firstYear === lastYear ? String(firstYear) : `(${firstYear} - ${lastYear})`;
 
-    const periodLabel = firstYear === lastYear
-      ? `(01/01/${lastYear} - 31/12/${lastYear})`
-      : `(01/01/${firstYear} - 31/12/${lastYear})`;
+    const groupRows = (rows) => {
+      const groups = [];
+      let cur = null;
+      for (const r of rows) {
+        if (cur && cur.baseFee === r.fee && cur.units === r.units) {
+          cur.endYear = r.year;
+          cur.fee += r.fee || 0; cur.sscl += r.sscl || 0; cur.vat += r.vat || 0; cur.total += r.total || 0;
+          cur.count++;
+        } else {
+          cur = { ...r, startYear: r.year, endYear: r.year, count: 1, baseFee: r.fee };
+          groups.push(cur);
+        }
+      }
+      return groups;
+    };
 
-    const preTable = preRows.length > 0 ? `
-        <p class="ol-section">Period ${preRows[0].year}${preRows.length > 1 ? ` - ${preRows[preRows.length - 1].year}` : ''}</p>
+    const hasPre = overrides?.tableRows ? overrides.tableRows.some(r => r.isPre) : preRows.length > 0;
+    const hasPost = overrides?.tableRows ? overrides.tableRows.some(r => !r.isPre) : postRows.length > 0;
+
+    let preTable = '';
+    if (hasPre) {
+      const displayRows = overrides?.tableRows ? overrides.tableRows.filter(r => r.isPre) : groupRows(preRows).map(g => ({
+        yearLabel: g.startYear === g.endYear ? String(g.startYear) : `${g.startYear}-${g.endYear}`,
+        units: g.units,
+        fee: g.fee,
+        sscl: g.sscl,
+        vat: g.vat,
+        total: g.total
+      }));
+      const prePeriodLabel = displayRows.length > 1 ? `${displayRows[0].yearLabel} - ${displayRows[displayRows.length - 1].yearLabel}` : displayRows[0].yearLabel;
+
+      preTable = `
+        <p class="ol-section">Period ${prePeriodLabel}</p>
         <table class="ol-table">
           <thead>
             <tr>
@@ -1070,14 +1679,16 @@ export default function MComManagement({ currentUser }) {
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td>${preRows[0].year}${preRows.length > 1 ? `-${preRows[preRows.length - 1].year}` : ''}</td>
-              <td>${preRows.length > 1 ? `${preRows.length} Years` : '1 Year'}</td>
-              <td>${fmt(preFee)}</td>
-              <td>${fmt(preSscl)}</td>
-              <td>${fmt(preVat)}</td>
-              <td>${fmt(preTotal)}</td>
-            </tr>
+            ${displayRows.map(row => `
+              <tr>
+                <td>${row.yearLabel}</td>
+                <td>${row.units}</td>
+                <td>${fmt(row.fee)}</td>
+                <td>${fmt(row.sscl)}</td>
+                <td>${fmt(row.vat)}</td>
+                <td>${fmt(row.total)}</td>
+              </tr>
+            `).join('')}
             <tr class="ol-total-row">
               <td colspan="2">Total</td>
               <td>${fmt(preFee)}</td>
@@ -1086,14 +1697,34 @@ export default function MComManagement({ currentUser }) {
               <td>${fmt(preTotal)}</td>
             </tr>
           </tbody>
-        </table>` : '';
+        </table>`;
+    }
 
-    const transitionNote = (preRows.length > 0 && postRows.length > 0)
+    const transitionNote = (hasPre && hasPost)
       ? `<p class="ol-para">We wish to inform you that charges have been revised and are applicable per unit basis from 01.03.2023 as follows.</p>`
       : '';
 
-    const postTable = postRows.length > 0 ? `
-        <p class="ol-section">Period ${postRows[0].year}${postRows.length > 1 ? ` - ${postRows[postRows.length - 1].year}` : ''}</p>
+    let postTable = '';
+    if (hasPost) {
+      const rows = overrides?.tableRows ? overrides.tableRows.filter(r => !r.isPre) : groupRows(postRows).map(g => ({
+        yearLabel: g.startYear === g.endYear ? String(g.startYear) : `${g.startYear}-${g.endYear}`,
+        units: g.units,
+        fee: g.fee,
+        sscl: g.sscl,
+        vat: g.vat,
+        total: g.total
+      }));
+
+      const totalFee = rows.reduce((s, r) => s + (parseFloat(r.fee) || 0), 0);
+      const totalSscl = rows.reduce((s, r) => s + (parseFloat(r.sscl) || 0), 0);
+      const totalVat = rows.reduce((s, r) => s + (parseFloat(r.vat) || 0), 0);
+      const totalTotal = rows.reduce((s, r) => s + (parseFloat(r.total) || 0), 0);
+
+      const firstPostYear = rows[0]?.yearLabel || '';
+      const lastPostYear = rows[rows.length - 1]?.yearLabel || '';
+
+      postTable = `
+        <p class="ol-section">Period ${firstPostYear}${rows.length > 1 ? ` - ${lastPostYear}` : ''}</p>
         <table class="ol-table">
           <thead>
             <tr>
@@ -1109,9 +1740,9 @@ export default function MComManagement({ currentUser }) {
             </tr>
           </thead>
           <tbody>
-            ${postRows.map(r => `
+            ${rows.map(r => `
             <tr>
-              <td>${r.year}</td>
+              <td>${r.yearLabel}</td>
               <td>${r.units}</td>
               <td>${fmt(r.fee)}</td>
               <td>${fmt(r.sscl)}</td>
@@ -1120,44 +1751,58 @@ export default function MComManagement({ currentUser }) {
             </tr>`).join('')}
             <tr class="ol-total-row">
               <td colspan="2">Total</td>
-              <td>${fmt(postFee)}</td>
-              <td>${fmt(postSscl)}</td>
-              <td>${fmt(postVat)}</td>
-              <td>${fmt(postTotal)}</td>
+              <td>${fmt(totalFee)}</td>
+              <td>${fmt(totalSscl)}</td>
+              <td>${fmt(totalVat)}</td>
+              <td>${fmt(totalTotal)}</td>
             </tr>
           </tbody>
-        </table>` : '';
+        </table>`;
+    }
+
+    const rl = overrides || {};
+    const refDisplay = rl.refNo || fileNo;
+    const dateDisplay = rl.date ? formatDotDate(rl.date) : formatDotDate(today);
+    const signName = rl.signName || 'Arct.M.T. Kapila Priyantha';
+    const signTitle1 = rl.signTitle1 || 'General Manager';
+    const signTitle2 = rl.signTitle2 || 'Condominium Management Authority';
+    const bodyParagraph1 = rl.bodyParagraph1 || `The Registration of your Management Committee has been expired on 31.12.${prevYear}. Therefore, please make arrangements to renew the registration of your Management Committee up to 31.12.${lastYear}.`;
+    const bodyParagraph2 = rl.bodyParagraph2 || `Every management committee is required to pay the registration fees for the year before 31<sup>st</sup> March ${lastYear}. But since you have failed to pay the said fees so far, I hereby request you to take necessary steps to pay some of <strong>Rs. ${fmt(grandTotal)}</strong> as soon as possible with duly prepared application form (annex-01).`;
 
     const letterHtml = `
       <div class="official-letter">
-        <div class="ol-ref"><span>${fileNo}</span><span>${formatDotDate(today)}</span></div>
-        <div class="ol-addr">
+        <div class="ol-ref"><span contenteditable="true">${escapeHtml(refDisplay)}</span><span contenteditable="true">${dateDisplay}</span></div>
+        <div class="ol-addr" contenteditable="true">
           <div>The Secretary,</div>
-          <div>The Management Corporation${planNoStr}</div>
-          <div>&quot;${escapeHtml(mc.management_corporation_name || '-')}&quot;,</div>
-          ${addressLines.map(l => `<div>${escapeHtml(l)},</div>`).join('')}
+          <div>${escapeHtml(mc.management_corporation_name || '-')}</div>
+          ${addressLines.map(l => `<div>${escapeHtml(l)}</div>`).join('')}
         </div>
-        <div class="ol-title">RENEWAL REGISTRATION OF THE MANAGEMENT CORPORATION FOR YEAR<br/>${periodLabel}</div>
-        <p class="ol-para">The Registration of your Management Corporation has been expired on 31.12.${prevYear}. Therefore, please make arrangements to renew the registration of your Management Corporation up to 31.12.${lastYear}.</p>
+        <div class="ol-title" contenteditable="true">RENEWAL REGISTRATION OF THE MANAGEMENT COMMITTEE FOR YEAR<br/>${periodLabel}</div>
+        <p class="ol-para" contenteditable="true">${bodyParagraph1}</p>
         
         ${preTable}
         ${transitionNote}
         ${postTable}
 
-        <p class="ol-para">Every management corporation is required to pay the registration fees for the year before 31<sup>st</sup> March ${lastYear}. But since you have failed to pay the said fees so far, I hereby request you to take necessary steps to pay some of <strong>Rs. ${fmt(grandTotal)}</strong> as soon as possible with duly prepared application form (annex-01).</p>
-        <p class="ol-para">Payment with regard to the above can be paid by cash or cheque in favor of &quot;<strong>Condominium Management Authority</strong>&quot;</p>
+        <p class="ol-para" contenteditable="true">${bodyParagraph2}</p>
+        <p class="ol-para" contenteditable="true">Payment with regard to the above can be paid by cash or cheque in favor of &quot;<strong>Condominium Management Authority</strong>&quot;</p>
         <div class="ol-footer" style="page-break-inside: avoid;">
-          <p class="ol-para">Thank You.</p>
-          <p class="ol-para">Yours Faithfully,</p>
-          <div class="ol-sign">
+          <p class="ol-para" contenteditable="true">Thank You.</p>
+          <p class="ol-para" contenteditable="true">Yours Faithfully,</p>
+          <div class="ol-sign" contenteditable="true">
             <div class="ol-sign-space"></div>
-            <div><strong>Arct.M.T. Kapila Priyantha</strong></div>
-            <div><strong>General Manager</strong></div>
-            <div><strong>Condominium Management Authority</strong></div>
+            <div><strong>${escapeHtml(signName)}</strong></div>
+            <div><strong>${escapeHtml(signTitle1)}</strong></div>
+            <div><strong>${escapeHtml(signTitle2)}</strong></div>
           </div>
         </div>
       </div>
     `;
+
+    const dispFee = overrides?.tableRows ? overrides.tableRows.reduce((s, r) => s + (parseFloat(r.fee) || 0), 0) : (preFee + postFee);
+    const dispSscl = overrides?.tableRows ? overrides.tableRows.reduce((s, r) => s + (parseFloat(r.sscl) || 0), 0) : (preSscl + postSscl);
+    const dispVat = overrides?.tableRows ? overrides.tableRows.reduce((s, r) => s + (parseFloat(r.vat) || 0), 0) : (preVat + postVat);
+    const dispTotal = overrides?.tableRows ? overrides.tableRows.reduce((s, r) => s + (parseFloat(r.total) || 0), 0) : grandTotal;
 
     const receiptHtml = `
       <div class="print-receipt">
@@ -1169,7 +1814,7 @@ export default function MComManagement({ currentUser }) {
         </div>
         <div class="rc-row"><span class="rc-fill-label">DGM Finance / Shroff</span><span class="rc-fill-line"></span></div>
         <div class="rc-checkline">
-          <span>Registration of Management Corporation</span><span class="rc-box"></span>
+          <span>Registration of Management Committee</span><span class="rc-box"></span>
           <span>/ Renewal</span><span class="rc-box">&#10003;</span>
           <span>/ Application Fee</span><span class="rc-box"></span>
           <span>/ Photocopy Charges</span><span class="rc-box"></span>
@@ -1181,10 +1826,10 @@ export default function MComManagement({ currentUser }) {
             <tr><td class="rc-label">Name of the MC &amp; Address</td><td>${escapeHtml(mc.management_corporation_name || '-')} | ${escapeHtml(mc.plan_no || '-')}</td></tr>
             <tr><td class="rc-label">Period</td><td>01/01/${firstYear} to 31/12/${lastYear}</td></tr>
             <tr><td class="rc-label">Number of Parcels (Units)</td><td>${mc.units || 0}</td></tr>
-            <tr><td class="rc-label">Fee Rs.</td><td>${fmt(preFee + postFee)}</td></tr>
-            <tr><td class="rc-label">Other Tax - SSCL (${SSCL_RATE * 100}%)</td><td>${fmt(preSscl + postSscl)}</td></tr>
-            <tr><td class="rc-label">VAT (${VAT_RATE * 100}%)</td><td>${fmt(preVat + postVat)}</td></tr>
-            <tr class="rc-total"><td>Total Amount Rs.</td><td>${fmt(grandTotal)}</td></tr>
+            <tr><td class="rc-label">Fee Rs.</td><td>${fmt(dispFee)}</td></tr>
+            <tr><td class="rc-label">Other Tax - SSCL (${SSCL_RATE * 100}%)</td><td>${fmt(dispSscl)}</td></tr>
+            <tr><td class="rc-label">VAT (${VAT_RATE * 100}%)</td><td>${fmt(dispVat)}</td></tr>
+            <tr class="rc-total"><td>Total Amount Rs.</td><td>${fmt(dispTotal)}</td></tr>
           </tbody>
         </table>
         <div class="rc-row" style="margin-top:14px"><span>Please accept Rs. ____________________ (Cash / Cheque) Cheque No. ____________________</span></div>
@@ -1202,33 +1847,80 @@ export default function MComManagement({ currentUser }) {
   @page { size: A4; margin: 0; }
   * { box-sizing: border-box; }
   body { margin: 0; padding: 0; font-family: 'Times New Roman', serif; color: #111; background: #fff; }
-  
-  .doc-page { 
-    padding: 15mm; 
-    min-height: 100vh;
-    position: relative;
-    page-break-after: always; 
-    break-after: page; 
+
+  /* - Edit Toolbar - */
+  .edit-toolbar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+    background: linear-gradient(135deg, #1a1f2e 0%, #2d3550 100%);
+    border-bottom: 2px solid #4f6ef7;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.35);
+    padding: 10px 18px;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
-  .doc-page:first-child {
-    padding-top: 2.5in;
+  .edit-toolbar .et-hint {
+    color: #a0b0d0; font-size: 13px; display: flex; align-items: center; gap: 7px;
   }
-  .doc-page:last-child {
-    page-break-after: auto;
-    break-after: auto;
+  .edit-toolbar .et-hint svg { opacity: 0.75; flex-shrink: 0; }
+  .edit-toolbar .et-btns { display: flex; gap: 8px; }
+  .edit-toolbar .et-btn {
+    cursor: pointer; border: none; border-radius: 6px; font-size: 13px;
+    font-weight: 600; padding: 7px 16px; display: flex; align-items: center; gap: 6px;
+    transition: opacity 0.15s, transform 0.1s;
   }
-  
+  .edit-toolbar .et-btn:hover { opacity: 0.85; transform: translateY(-1px); }
+  .edit-toolbar .et-btn:active { transform: translateY(0); }
+  .edit-toolbar .et-btn-print { background: #4f6ef7; color: #fff; }
+  .edit-toolbar .et-btn-close { background: rgba(255,255,255,0.12); color: #cdd8f0; }
+
+  /* editable focus ring */
+  [contenteditable]:focus { outline: 2px dashed #4f6ef7; outline-offset: 2px; border-radius: 2px; }
+  [contenteditable]:hover:not(:focus) { background: rgba(79,110,247,0.06); border-radius: 2px; }
+
   @media print {
-    body { min-height: 100vh; }
+    @page { margin: 0; }
+    .edit-toolbar { display: none !important; }
+    body { margin: 0; padding: 0; }
+    [contenteditable] { outline: none !important; background: transparent !important; }
     .doc-page { 
       page-break-after: always; 
       break-after: page; 
       display: block; 
+      padding-bottom: 5mm !important;
+      margin-bottom: 0 !important;
     }
+    .doc-page.letter-page {
+      padding-top: 2.2in !important;
+    }
+    .official-letter { font-size: 16px; line-height: 1.25; padding: 0 5px; }
+    .official-letter .ol-ref, .official-letter .ol-addr { margin-bottom: 2px; }
+    .official-letter .ol-addr div { margin: 0; }
+    .official-letter .ol-title { margin: 2px 0; font-size: 16px; }
+    .official-letter .ol-para { margin: 4px 0; }
+    .official-letter table.ol-table { font-size: 14px; margin: 4px 0; }
+    .official-letter table.ol-table th, .official-letter table.ol-table td { padding: 2px 4px; }
+    .official-letter .ol-sign { margin-top: 4px; }
+    .official-letter .ol-sign-space { height: 10px; }
+  }
+
+  .doc-page { 
+    padding: 15mm; 
+    position: relative;
+    page-break-after: always; 
+    break-after: page; 
+  }
+  .doc-page.letter-page {
+    padding-top: 2.2in;
+    margin-top: 52px;
+  }
+  .doc-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+    margin-top: 0;
   }
 
   /* - Covering Letter - */
-  .official-letter { max-width: 700px; margin: 0 auto; padding: 10px; font-family: Garamond, 'Times New Roman', serif; font-size: 13px; line-height: 1.4; }
+  .official-letter { max-width: 700px; margin: 0 auto; padding: 10px; font-family: 'Times New Roman', serif; font-size: 16px; line-height: 1.4; color: #111; }
   .official-letter .ol-ref { display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 12px; }
   .official-letter .ol-addr { margin-bottom: 12px; }
   .official-letter .ol-addr div { margin: 2px 0; }
@@ -1236,8 +1928,8 @@ export default function MComManagement({ currentUser }) {
   .official-letter .ol-yearline { font-weight: 700; margin: 6px 0; }
   .official-letter .ol-section { font-weight: 700; margin: 10px 0 2px; font-size: 13px; text-indent: 0; }
   .official-letter .ol-para { margin: 8px 0; text-align: justify; }
-  .official-letter table.ol-table { width: 100%; border-collapse: collapse; margin: 2px 0 10px; font-size: 12px; }
-  .official-letter table.ol-table th, .official-letter table.ol-table td { border: 1px solid #000; padding: 3px 6px; text-align: center; vertical-align: middle; }
+  .official-letter table.ol-table { width: 100%; border-collapse: collapse; margin: 2px 0 10px; font-size: 13px; }
+  .official-letter table.ol-table th, .official-letter table.ol-table td { border: 1px solid #000; padding: 4px 6px; text-align: center; vertical-align: middle; }
   .official-letter table.ol-table th { font-weight: 700; background: #fff; }
   .official-letter table.ol-table td:first-child { text-align: left; font-weight: 600; }
   .official-letter table.ol-table .ol-total-row td { font-weight: 700; background: #f9f9f9; }
@@ -1267,27 +1959,76 @@ export default function MComManagement({ currentUser }) {
 </style>
 </head>
 <body>
-  <div class="doc-page">${letterHtml}</div>
-  <div class="doc-page">${receiptHtml}</div>
+  <div class="edit-toolbar">
+    <span class="et-hint">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      Click any text on the letter to edit it before printing
+    </span>
+    <div class="et-btns">
+      <button class="et-btn et-btn-print" onclick="window.print()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+        Print
+      </button>
+      <button class="et-btn et-btn-close" onclick="window.close()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        Close
+      </button>
+    </div>
+  </div>
+  <div class="doc-page letter-page">${letterHtml}</div>
+  <div class="doc-page doc-page-receipt">${receiptHtml}</div>
   <script>
     window.addEventListener('load', function() {
+      // Auto-adjust font size to ensure it fits on one page
+      var letter = document.querySelector('.official-letter');
+      if (letter) {
+        var maxH = 750; // Safe max height that fits even if Chrome "Default" margins are active
+        var currentSize = 16;
+        while(letter.offsetHeight > maxH && currentSize > 12) {
+          currentSize -= 0.2;
+          letter.style.fontSize = currentSize + 'px';
+          
+          var title = letter.querySelector('.ol-title');
+          if (title) title.style.fontSize = currentSize + 'px';
+          
+          var tables = letter.querySelectorAll('.ol-table');
+          tables.forEach(function(t) {
+            t.style.fontSize = (currentSize - 2) + 'px';
+          });
+        }
+      }
+
       setTimeout(function() {
         window.focus();
-        window.print();
-      }, 400);
+        // window.print() is handled by the outer component
+      }, 500);
     });
   </script>
 </body>
 </html>`;
 
-    const blob = new Blob([html], { type: 'text/html' });
-    const blobUrl = URL.createObjectURL(blob);
-    const printWin = window.open(blobUrl, '_blank', 'noopener,noreferrer');
-    if (!printWin) {
-      showToast('Please allow pop-ups to print the renewal receipt', 'error');
-      return;
-    }
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+    // Print directly using a hidden iframe to prevent opening a new tab
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '200vw'; // push completely off-screen
+    iframe.style.bottom = '0';
+    iframe.style.width = '210mm'; // Standard A4 width
+    iframe.style.height = '297mm'; // Standard A4 height
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow.document;
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    iframe.contentWindow.focus();
+    setTimeout(() => {
+      iframe.contentWindow.print();
+      setTimeout(() => {
+        document.body.removeChild(iframe);
+      }, 1000);
+    }, 500);
   }
 
   async function handleExport(format, selectedFields = null) {
@@ -1358,7 +2099,7 @@ export default function MComManagement({ currentUser }) {
       const ws = XLSX.utils.json_to_sheet(rows);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'M.Com Records');
-      XLSX.writeFile(wb, `CMA_MCom_Records_${new Date().toISOString().split('T')[0]}.xlsx`);
+      XLSX.writeFile(wb, `CMA_MCom_Records_${getServerDate().toISOString().split('T')[0]}.xlsx`);
       setExportModalOpen(false);
       showToast('Exported ✅');
     } catch (err) {
@@ -1373,6 +2114,7 @@ export default function MComManagement({ currentUser }) {
     if (!file) return;
 
     try {
+      setIsImporting(true);
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
       let allRows = [];
@@ -1402,6 +2144,7 @@ export default function MComManagement({ currentUser }) {
     } catch (err) {
       showToast(err.message || 'Import failed', 'error');
     } finally {
+      setIsImporting(false);
       e.target.value = '';
     }
   }
@@ -1480,10 +2223,121 @@ export default function MComManagement({ currentUser }) {
     'ACTIONS',
   ];
 
+  async function openViewById(mcIdOrPlan) {
+    if (!mcIdOrPlan) return;
+    try {
+      const mcIdNum = parseInt(mcIdOrPlan, 10);
+      let match = mcs.find(m => m.id === mcIdNum || String(m.plan_no).trim().toLowerCase() === String(mcIdOrPlan).trim().toLowerCase());
+      if (!match) {
+        const API_BASE = (import.meta.env.VITE_API_URL || '/api').trim();
+        try {
+          const res = await fetch(`${API_BASE}/mcom/${mcIdOrPlan}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.id) match = data;
+          }
+        } catch (e) { }
+      }
+      if (match) {
+        setViewRecord(match);
+        setViewModalOpen(true);
+      } else {
+        setSearchTerm(mcIdOrPlan);
+      }
+    } catch (e) {
+      console.error('Failed to open MCom by id:', e);
+    }
+  }
+
+  async function openRenewalById(id) {
+    if (!id) return;
+    const match = mcs.find(m => String(m.id) === String(id));
+    if (match) {
+      openRlLetterModal(match, buildMcomMultiYearRows(match, settings));
+      return;
+    }
+    const API_BASE = import.meta.env.VITE_API_URL ?? '/api';
+    try {
+      const response = await fetch(`${API_BASE}/mcom/${encodeURIComponent(id)}`);
+      if (!response.ok) return;
+      const mc = await response.json();
+      if (mc) openRlLetterModal(mc, buildMcomMultiYearRows(mc, settings));
+    } catch (e) {
+      console.error('Failed to open MCom renewal by id:', e);
+    }
+  }
+
+  const _pendingOpenHandled = useRef(false);
+  useEffect(() => {
+    // Only process once, and only after data has loaded (mcs is non-empty or we've waited long enough)
+    if (_pendingOpenHandled.current) return;
+    const pendingId = sessionStorage.getItem('cma_open_mcom_id');
+    const pendingRenewalId = sessionStorage.getItem('cma_open_mcom_renewal_id');
+    if (!pendingId && !pendingRenewalId) return; // nothing to do
+    
+    _pendingOpenHandled.current = true;
+    if (pendingId) {
+      sessionStorage.removeItem('cma_open_mcom_id');
+      openViewById(pendingId);
+    }
+
+    if (pendingRenewalId) {
+      sessionStorage.removeItem('cma_open_mcom_renewal_id');
+      openRenewalById(pendingRenewalId);
+    }
+  }, [mcs]);
+
+  useEffect(() => {
+    const handleOpenEvent = (event) => {
+      openViewById(event?.detail);
+    };
+    const handleOpenRenewalEvent = (event) => {
+      openRenewalById(event?.detail);
+    };
+    window.addEventListener('cma:open-mcom-id', handleOpenEvent);
+    window.addEventListener('cma:open-mcom-renewal', handleOpenRenewalEvent);
+    return () => {
+      window.removeEventListener('cma:open-mcom-id', handleOpenEvent);
+      window.removeEventListener('cma:open-mcom-renewal', handleOpenRenewalEvent);
+    };
+  }, [mcs]);
+
+  useEffect(() => {
+    const handleFilterEvent = (event) => {
+      if (event?.detail) {
+        setStatusFilter(event.detail);
+        setSearchTerm('');
+        setYearFilter('');
+        setMonthFilter('');
+        setCategoryFilter('');
+      }
+    };
+    window.addEventListener('cma:filter-mcom', handleFilterEvent);
+    return () => window.removeEventListener('cma:filter-mcom', handleFilterEvent);
+  }, []);
+
   const maxPage = Math.max(1, Math.ceil(totalCount / pageSize));
 
   return (
     <div style={{ padding: 24, fontFamily: "var(--font-sans)", background: theme.bg, minHeight: '100vh' }}>
+      <style>{`
+        .official-letter { max-width: 680px; margin: 0; padding: 24px; font-family: 'Times New Roman', serif; color: #111; font-size: 16px; line-height: 1.4; }
+        .official-letter .ol-ref { display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 12px; }
+        .official-letter .ol-addr { margin-bottom: 10px; }
+        .official-letter .ol-addr div { margin: 1px 0; }
+        .official-letter .ol-title { text-align: left; font-weight: 700; text-decoration: underline; margin: 12px 0; white-space: normal; }
+        .official-letter .ol-yearline { font-weight: 700; margin: 4px 0; }
+        .official-letter .ol-para { margin: 6px 0; text-align: justify; }
+        .official-letter table.ol-table { width: 100%; border-collapse: collapse; margin: 6px 0 10px; font-size: 12px; }
+        .official-letter table.ol-table th, .official-letter table.ol-table td { border: 1px solid #444; padding: 4px 5px; text-align: center; }
+        .official-letter table.ol-table th { font-weight: 700; background: #f4f4f4; }
+        .official-letter table.ol-table .ol-total-row td { font-weight: 700; }
+        .official-letter .ol-sign { margin-top: 15px; page-break-inside: avoid; }
+        .official-letter .ol-sign-space { height: 35px; }
+        @media print {
+          .official-letter { padding: 6px 10px; font-size: 13.5px; }
+        }
+      `}</style>
       <div style={{ fontSize: 12, color: '#999', marginBottom: 16 }}>
         <span>Home</span> / <span>M.Com Management</span>
       </div>
@@ -1498,14 +2352,18 @@ export default function MComManagement({ currentUser }) {
           <button onClick={() => setExportModalOpen(true)} style={btnOutline}>
             <i className="fas fa-upload" /> Export
           </button>
-          <label style={{ ...btnOutline, cursor: 'pointer', margin: 0 }}>
-            <i className="fas fa-upload" /> Import
-            <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={importExcel} />
-          </label>
-          <button onClick={handleDeleteAll} style={{ ...btnOutline, color: theme.red, borderColor: theme.red }} title="Delete all M.Com Records">
-            <i className="fas fa-trash" /> Delete All
-          </button>
-          {lastImportedFileNos && lastImportedFileNos.length > 0 && (
+          {canCreate && (
+            <label style={{ ...btnOutline, cursor: 'pointer', margin: 0 }}>
+              <i className="fas fa-upload" /> Import
+              <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={importExcel} />
+            </label>
+          )}
+          {canDelete && (
+            <button onClick={handleDeleteAll} style={{ ...btnOutline, color: theme.red, borderColor: theme.red }} title="Delete all M.Com Records">
+              <i className="fas fa-trash" /> Delete All
+            </button>
+          )}
+          {canDelete && lastImportedFileNos && lastImportedFileNos.length > 0 && (
             <button onClick={handleDeleteImported} style={{ ...btnOutline, color: theme.red, borderColor: theme.red }} title="Delete imported batch">
               <i className="fas fa-trash" /> Delete Imported
             </button>
@@ -1602,31 +2460,50 @@ export default function MComManagement({ currentUser }) {
             )}
           </div>
 
-          <button onClick={openAdd} style={btnPrimary}>
-            <i className="fas fa-plus" /> Add M.Com
-          </button>
+          {canCreate && (
+            <button onClick={openAdd} style={btnPrimary}>
+              <i className="fas fa-plus" /> Add M.Com
+            </button>
+          )}
         </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 14, marginBottom: 16 }}>
         {[
-          { label: 'TOTAL MCOM', value: stats.total, icon: 'fa-folder-open', color: theme.blue },
-          { label: 'ACTIVE', value: stats.active, icon: 'fa-check-circle', color: theme.green },
-          { label: 'NON ACTIVE', value: stats.inactive, icon: 'fa-ban', color: theme.text2 },
-          { label: 'PENDING', value: stats.pending, icon: 'fa-exclamation', color: theme.red },
-        ].map(({ label, value, icon, color }) => (
-          <div key={label} style={{ background: theme.card, borderRadius: 12, padding: 18, border: `1px solid ${theme.border}` }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ fontSize: 24, color: color || theme.blue, opacity: 0.7 }}>
-                <i className={`fas ${icon}`} />
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: theme.text3, textTransform: 'uppercase', letterSpacing: '.8px', fontWeight: 500 }}>{label}</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: color || theme.text }}>{value}</div>
+          { label: 'TOTAL MCOM', value: stats.total, icon: 'fa-folder-open', color: theme.blue, filterValue: '' },
+          { label: 'ACTIVE', value: stats.active, icon: 'fa-check-circle', color: theme.green, filterValue: 'Active' },
+          { label: 'NON ACTIVE', value: stats.inactive, icon: 'fa-ban', color: theme.text2, filterValue: 'Non Active' },
+          { label: 'PENDING', value: stats.pending, icon: 'fa-exclamation', color: theme.red, filterValue: 'Pending' },
+        ].map(({ label, value, icon, color, filterValue }) => {
+          const isActive = statusFilter === filterValue;
+          return (
+            <div
+              key={label}
+              onClick={() => setStatusFilter(filterValue)}
+              style={{
+                background: theme.card,
+                borderRadius: 12,
+                padding: 18,
+                border: isActive ? `2px solid ${color || theme.blue}` : `1px solid ${theme.border}`,
+                cursor: 'pointer',
+                transition: 'box-shadow 0.15s, border 0.15s',
+                boxShadow: isActive ? `0 0 0 3px ${(color || theme.blue)}22` : 'none',
+              }}
+              onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)'; }}
+              onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.boxShadow = 'none'; }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ fontSize: 24, color: color || theme.blue, opacity: 0.7 }}>
+                  <i className={`fas ${icon}`} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: theme.text3, textTransform: 'uppercase', letterSpacing: '.8px', fontWeight: 500 }}>{label}</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: color || theme.text }}>{value}</div>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className={`cma-table-card-container ${isZoomed ? 'table-fullscreen-mode' : ''}`} style={{ background: theme.card, borderRadius: 12, border: `1px solid ${theme.border}`, boxShadow: '0 2px 12px rgba(0,0,0,.07)', overflow: 'hidden' }}>
@@ -1658,9 +2535,9 @@ export default function MComManagement({ currentUser }) {
             >
               <option value="">All Status</option>
               <option value="New">New</option>
-              <option value="Open">Open</option>
+              <option value="Active">Active</option>
+              <option value="Non Active">Non Active</option>
               <option value="Pending">Pending</option>
-              <option value="Close">Close</option>
             </select>
             <select
               id="mcom_year_filter"
@@ -1773,8 +2650,9 @@ export default function MComManagement({ currentUser }) {
                 <tr><td colSpan={TABLE_HEADERS.length} style={{ padding: 24, textAlign: 'center', color: theme.text3 }}>No M.Com records found</td></tr>
               ) : (
                 filtered.map((mc) => (
-                  <tr key={mc.id} style={{ borderBottom: `1px solid ${theme.border}` }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
+                  <tr key={mc.id} style={{ borderBottom: `1px solid ${theme.border}`, opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s', cursor: 'pointer' }}
+                    onClick={() => openView(mc)}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#f0f4ff'}
                     onMouseLeave={(e) => e.currentTarget.style.background = ''}
                   >
                     <td style={cellStyle} title={mc.reg_date || '—'}>{mc.reg_date || '—'}</td>
@@ -1807,15 +2685,15 @@ export default function MComManagement({ currentUser }) {
                     <td style={cellStyle} title={mc.email_address || '—'}>{mc.email_address || '—'}</td>
                     <td style={cellStyle} title={mc.awareness_date || '—'}>{mc.awareness_date || '—'}</td>
                     <td className="mc-td-status" style={tdStatusStyle}>
-                      <StatusPill status={mc.status} renewalStatus={mc.renewal_payment_status} />
+                      <StatusPill status={mc.status} renewalStatus={mc.renewal_payment_status} record={mc} />
                     </td>
                     <td className="mc-td-actions" style={tdActionsStyle}>
                       <div style={{ display: 'flex', gap: 2 }}>
-                        <ActionBtn icon="fas fa-eye" color={theme.blue} title="View" onClick={() => openView(mc)} />
-                        <ActionBtn icon="fas fa-history" color={theme.text2} title="History" onClick={() => { setSelectedHistoryRecord(mc); setShowHistoryModal(true); }} />
-                        <ActionBtn icon="fas fa-edit" color={theme.orange} title="Edit" onClick={() => openEdit(mc)} />
-                        <ActionBtn icon="fas fa-trash" color={theme.red} title="Delete" onClick={() => remove(mc.id)} />
-                        <ActionBtn icon="fas fa-sync-alt" color={theme.green} title="Renewal" onClick={() => openRenewal(mc)} />
+                        {canViewRecord ? <ActionBtn icon="fas fa-eye" color={theme.blue} title="View" onClick={() => openView(mc)} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
+                        {canHistory ? <ActionBtn icon="fas fa-history" color={theme.text2} title="History" onClick={() => { setSelectedHistoryRecord(mc); setShowHistoryModal(true); }} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
+                        {canEdit ? <ActionBtn icon="fas fa-edit" color={theme.orange} title="Edit" onClick={() => openEdit(mc)} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
+                        {canDelete ? <ActionBtn icon="fas fa-trash" color={theme.red} title="Delete" onClick={() => remove(mc.id)} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
+                        {(canRenewal || canEdit) && <ActionBtn icon="fas fa-sync-alt" color={theme.green} title="Renewal" onClick={() => openRenewal(mc)} />}
                       </div>
                     </td>
                   </tr>
@@ -1869,7 +2747,7 @@ export default function MComManagement({ currentUser }) {
               <FormField label="Audited Account" value={formData.audited_account} onChange={field('audited_account')} />
               <FormField label="Building Insurance" value={formData.building_insurance} onChange={field('building_insurance')} />
               <FormField label="Active / Non Active" value={formData.active_non_active} onChange={field('active_non_active')} />
-              <FormField label="Renewal Date Vise" value={formData.renewal_date_vise} onChange={field('renewal_date_vise')} />
+              <FormSelect label="Renewal Date Vise" value={formData.renewal_date_vise} onChange={field('renewal_date_vise')} options={['', 'Active', 'Non Active']} />
               <FormField label="AGM Date Vise" value={formData.agm_date_vise} onChange={field('agm_date_vise')} />
 
               <SectionLabel>Category / Status</SectionLabel>
@@ -1879,15 +2757,17 @@ export default function MComManagement({ currentUser }) {
                 label="Status"
                 value={formData.status}
                 onChange={field('status')}
-                options={['New', 'Open', 'Pending', 'Close']}
+                options={['Active', 'Non Active', 'Pending']}
               />
             </div>
 
             <div style={{ padding: '14px 22px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
               <button onClick={() => setModalOpen(false)} style={btnOutline}>Cancel</button>
-              <button onClick={save} style={btnPrimary}>
-                <i className="fas fa-save" /> {editingId ? 'Update' : 'Save'}
-              </button>
+              {(editingId ? canEdit : canCreate) && (
+                <button onClick={save} style={btnPrimary}>
+                  <i className="fas fa-save" /> {editingId ? 'Update' : 'Save'}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -1906,7 +2786,7 @@ export default function MComManagement({ currentUser }) {
                 Identity &amp; Filing
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 0, marginBottom: 20 }}>
-                <ViewField label="Reg Date" value={viewRecord.reg_date} />
+                <ViewField label="Reg Date" value={formatDisplayDate(viewRecord.reg_date)} />
                 <ViewField label="Old File No" value={viewRecord.old_file_no} />
                 <ViewField label="New File No" value={viewRecord.new_file_no} />
                 <ViewField label="Management Corporation Name" value={viewRecord.management_corporation_name} />
@@ -1917,7 +2797,7 @@ export default function MComManagement({ currentUser }) {
                 <ViewField label="Council" value={viewRecord.council} />
                 <ViewField label="Certificate File No" value={viewRecord.certificate_file_no} />
                 <ViewField label="Email Address" value={viewRecord.email_address} />
-                <ViewField label="Awareness Date" value={viewRecord.awareness_date} />
+                <ViewField label="Awareness Date" value={formatDisplayDate(viewRecord.awareness_date)} />
                 <ViewField label="Remark" value={viewRecord.remark} />
               </div>
 
@@ -1939,7 +2819,7 @@ export default function MComManagement({ currentUser }) {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 0, marginBottom: 20 }}>
                 <ViewField label="Renewal Period" value={viewRecord.renewal_period} />
-                <ViewField label="AGM Date" value={viewRecord.agm_date} />
+                <ViewField label="AGM Date" value={formatDisplayDate(viewRecord.agm_date)} />
                 <ViewField label="AGM Minutes" value={viewRecord.agm_minutes} />
                 <ViewField label="Attendance" value={viewRecord.attendance} />
                 <ViewField label="Audited Account" value={viewRecord.audited_account} />
@@ -1953,20 +2833,37 @@ export default function MComManagement({ currentUser }) {
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
                 <span style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Status:</span>
-                <StatusPill status={viewRecord.status} />
+                <StatusPill status={viewRecord.status} record={viewRecord} />
               </div>
+              {(() => {
+                if (!viewRecord) return null;
+                const st = getDetailedRenewalStatusText(viewRecord, viewRecord.status, settings);
+                return (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+                    <span style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>Renewal Status:</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: st.isOk ? theme.green : theme.red }}>
+                      <i className={`fas ${st.isOk ? 'fa-check-circle' : 'fa-exclamation-circle'}`} style={{ marginRight: 6 }} />
+                      {st.text}
+                    </span>
+                  </div>
+                );
+              })()}
 
               {/* Audit / timestamps */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 10 }}>
-                <ViewField label="Created At" value={viewRecord.created_at || '—'} />
-                <ViewField label="Updated At" value={viewRecord.updated_at || '—'} />
+              {/* Audit / timestamps */}
+              <div style={{ fontSize: 12, fontWeight: 700, color: theme.navy, textTransform: 'uppercase', letterSpacing: '1px', borderBottom: `1px solid ${theme.border}`, paddingBottom: 6, marginBottom: 12, marginTop: 20 }}>Audit</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 0, marginTop: 10 }}>
+                <ViewField label="Created At" value={viewRecord.created_at ? `${formatDisplayDate(viewRecord.created_at)} (By: ${viewRecord.created_by || 'System'})` : '—'} />
+                <ViewField label="Updated At" value={viewRecord.updated_at ? `${formatDisplayDate(viewRecord.updated_at)} (By: ${viewRecord.updated_by || viewRecord.modified_by || 'System'})` : '—'} />
               </div>
             </div>
 
             <div style={{ padding: '14px 22px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-              <button onClick={() => { setViewModalOpen(false); openEdit(viewRecord); }} style={btnPrimary}>
-                <i className="fas fa-edit" /> Edit
-              </button>
+              {canEdit && (
+                <button onClick={() => { setViewModalOpen(false); openEdit(viewRecord); }} style={btnPrimary}>
+                  <i className="fas fa-edit" /> Edit
+                </button>
+              )}
               <button onClick={() => setViewModalOpen(false)} style={btnOutline}>Close</button>
             </div>
           </div>
@@ -1995,37 +2892,98 @@ export default function MComManagement({ currentUser }) {
       {renewalModalOpen && renewalRecord && (() => {
         const mc = renewalRecord;
         let multiRows = buildMcomMultiYearRows(mc, settings);
+        const originalMultiRows = [...multiRows];
         let grandTotal = multiRows.reduce((s, r) => s + r.total, 0);
-        
-        if (multiRows.length === 0 && mc?.renewal_paid_amount) {
-          grandTotal = mc.renewal_paid_amount;
-          const grandFee = grandTotal / 1.2095;
+
+        const isActiveStatus = String(mc.status || '').toLowerCase() === 'active' || String(mc.renewal_date_vise || '').toLowerCase() === 'active';
+
+        let _paidYearRows = [];
+        if (originalMultiRows.length === 0 && (mc?.renewal_paid_amount || isActiveStatus)) {
+          let pTotal = parseFloat(mc?.renewal_paid_amount) || 0;
+          const isGov = String(mc?.mc_mcom || '').toUpperCase().includes('GOV') || String(mc?.category || '').toLowerCase().includes('government');
+          const isNhda = String(mc?.mc_mcom || '').toUpperCase().includes('NHDA') || String(mc?.category || '').toLowerCase().includes('nhda') || String(mc?.file_no || '').toUpperCase().includes('NHDA') || String(mc?.new_file_no || '').toUpperCase().includes('NHDA') || String(mc?.old_file_no || '').toUpperCase().includes('NHDA');
+          const units = parseInt(mc?.units) || 0;
+          const yr = mc.renewal_paid_year || getServerDate().getFullYear();
+          const rate = getMcomFeeForYear(units, yr, isGov, settings, mc);
+
+          if (pTotal === 0 && isActiveStatus) {
+            let baseFee = rate * units;
+            let baseSscl = baseFee * 0.025;
+            let baseVat = (baseFee + baseSscl) * 0.18;
+            pTotal = baseFee + baseSscl + baseVat;
+          }
+
+          const grandFee = pTotal / 1.2095;
           const grandSscl = grandFee * 0.025;
           const grandVat = (grandFee + grandSscl) * 0.18;
-          
-          const isGov = String(mc?.mc_mcom || '').toUpperCase().includes('GOV') || String(mc?.category || '').toLowerCase().includes('government');
-          const units = parseInt(mc?.units) || 0;
-          const yr = mc.renewal_paid_year || new Date().getFullYear();
-          const rate = getMcomFeeForYear(units, yr, isGov, settings);
-          
+
           let calculatedMonths = 12;
           if (rate > 0) {
             calculatedMonths = Math.round(grandFee / (rate / 12));
             if (calculatedMonths < 1) calculatedMonths = 12;
           }
-          
+
           const numYears = Math.max(1, Math.round(calculatedMonths / 12));
           const startYr = yr - numYears + 1;
-          
+
           for (let y = startYr; y <= yr; y++) {
-             multiRows.push({ year: y, units, fee: grandFee / numYears, sscl: grandSscl / numYears, vat: grandVat / numYears, total: grandTotal / numYears, isGov });
+            const showUnits = (y < 2023 && (isGov || isNhda)) ? '-' : units;
+            _paidYearRows.push({ year: y, units: showUnits, fee: grandFee / numYears, sscl: grandSscl / numYears, vat: grandVat / numYears, total: pTotal / numYears, isGov });
+          }
+
+          if (mc.renewal_payment_status === 'Approved' || mc.renewal_payment_status === 'Pending Approval') {
+            grandTotal = pTotal;
           }
         }
 
+        if (originalMultiRows.length === 0 && _paidYearRows.length > 0) {
+          multiRows = _paidYearRows;
+        }
+
         const payStatus = mc.renewal_payment_status;
+        const hasRemainingYears = originalMultiRows && originalMultiRows.length > 0;
+        const isApproved = payStatus === 'Approved';
+        const isPendingApproval = payStatus === 'Pending Approval';
+        const isFullyPaid = (isApproved && !hasRemainingYears) || (isActiveStatus && !hasRemainingYears) || (!hasRemainingYears && !isPendingApproval);
+        const isPartiallyPaid = (isApproved && hasRemainingYears) || (isActiveStatus && hasRemainingYears);
+        const isRejected = payStatus === 'Rejected';
+
+        const barBg = isFullyPaid ? '#f0fdf4'
+          : isPartiallyPaid ? '#eff6ff'
+            : isRejected ? '#fef2f2'
+              : isPendingApproval ? '#fffbeb'
+                : '#fff7ed';
+
+        const barBorder = isFullyPaid ? '#16a34a'
+          : isPartiallyPaid ? '#1a3a6b'
+            : isRejected ? '#ef4444'
+              : isPendingApproval ? '#f59e0b'
+                : '#f59e0b';
+
+        const barColor = isFullyPaid ? '#16a34a'
+          : isPartiallyPaid ? '#1a3a6b'
+            : isRejected ? '#dc2626'
+              : '#f59e0b';
+
+        const barIcon = isFullyPaid ? 'fa-check-circle'
+          : isPartiallyPaid ? 'fa-check-circle'
+            : isRejected ? 'fa-times-circle'
+              : isPendingApproval ? 'fa-hourglass-half'
+                : 'fa-clock';
+
+        const barText = isFullyPaid ? 'Renewal Fee Paid & Approved'
+          : isPartiallyPaid ? 'Renewal Fee Partially Paid'
+            : isRejected ? 'Payment Rejected by AGM'
+              : isPendingApproval ? 'Payment Pending AGM Approval'
+                : 'Renewal Fee Not Yet Paid';
+
         const fmt = (n) => Number(n).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-        const selectedRows = multiRows.filter(r => selectedRenewalYears.includes(r.year));
+        const combinedRows = [...multiRows, ...originalMultiRows].reduce((acc, current) => {
+          if (!acc.find(item => item.year === current.year)) acc.push(current);
+          return acc;
+        }, []);
+        const selectedRows = combinedRows.filter(r => selectedRenewalYears.includes(r.year));
         const selectedTotal = selectedRows.reduce((s, r) => s + r.total, 0);
         const allSelected = multiRows.length > 0 && selectedRenewalYears.length === multiRows.length;
         const someSelected = selectedRenewalYears.length > 0;
@@ -2037,12 +2995,12 @@ export default function MComManagement({ currentUser }) {
         );
 
         return (
-          <div style={overlayStyle} onClick={(e) => e.target === e.currentTarget && setRenewalModalOpen(false)}>
+          <div style={overlayStyle} onClick={(e) => { if (e.target === e.currentTarget) { setRenewalModalOpen(false); setSelectedRenewalYears([]); setManualPaidYears(''); } }}>
             <div style={{ ...modalStyle, maxWidth: 780, display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
 
               <div style={modalHeader}>
                 <span style={{ fontSize: 16, fontWeight: 700 }}>Renewal Receipt</span>
-                <button onClick={() => { setRenewalModalOpen(false); setSelectedRenewalYears([]); }} style={closeBtnStyle}><i className="fas fa-times" /></button>
+                <button onClick={() => { setRenewalModalOpen(false); setSelectedRenewalYears([]); setManualPaidYears(''); }} style={closeBtnStyle}><i className="fas fa-times" /></button>
               </div>
 
               <div style={{ padding: 22, overflowY: 'auto', flex: 1 }}>
@@ -2055,7 +3013,7 @@ export default function MComManagement({ currentUser }) {
                   </div>
                   {multiRows.length > 0 && (
                     <button
-                      onClick={() => printRenewalLetter(mc, someSelected ? selectedRows : multiRows)}
+                      onClick={() => openRlLetterModal(mc, someSelected ? selectedRows : multiRows)}
                       disabled={someSelected && selectedRows.length === 0}
                       style={{ ...btnPrimary, padding: '9px 14px', gap: 6, opacity: (!someSelected || selectedRows.length > 0) ? 1 : 0.5 }}
                     >
@@ -2222,6 +3180,10 @@ export default function MComManagement({ currentUser }) {
                               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 6, padding: '2px 8px', fontSize: 10.5, fontWeight: 700, color: '#15803d' }}>
                                 <i className="fas fa-check" /> Approved
                               </span>
+                            ) : payStatus === 'Rejected' ? (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, padding: '2px 8px', fontSize: 10.5, fontWeight: 700, color: '#dc2626' }}>
+                                <i className="fas fa-times" /> Rejected
+                              </span>
                             ) : payStatus === 'Pending Approval' ? (
                               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 6, padding: '2px 8px', fontSize: 10.5, fontWeight: 700, color: '#c2410c' }}>
                                 <i className="fas fa-hourglass-half" /> Awaiting
@@ -2233,7 +3195,7 @@ export default function MComManagement({ currentUser }) {
                             )}
                           </td>
                           <td style={{ padding: '6px 8px', color: theme.text2, fontSize: 11, whiteSpace: 'nowrap', wordBreak: 'normal' }}>
-                            {payStatus === 'Approved' ? `Approved on ${mc.acknowledgement_date || '-'}` : payStatus === 'Pending Approval' ? 'AGM will be notified to review' : '-'}
+                            {payStatus === 'Approved' ? `Approved on ${mc.acknowledgement_date || '-'}` : payStatus === 'Rejected' ? `Rejected: ${mc.renewal_rejection_reason || '-'}` : payStatus === 'Pending Approval' ? 'AGM will be notified to review' : '-'}
                           </td>
                         </tr>
                         <tr>
@@ -2259,15 +3221,15 @@ export default function MComManagement({ currentUser }) {
                   </div>
                 </div>
 
-                <div style={{ border: `1px solid ${theme.border}`, borderRadius: 10, background: payStatus === 'Approved' ? '#f0fdf4' : payStatus === 'Pending Approval' ? '#fffbeb' : '#fff7ed', padding: 14, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                <div style={{ border: `1px solid ${barBorder}`, borderRadius: 10, background: barBg, padding: 14, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: payStatus === 'Approved' ? '#16a34a' : '#f59e0b' }}>
-                      <i className={`fas ${payStatus === 'Approved' ? 'fa-check-circle' : payStatus === 'Pending Approval' ? 'fa-hourglass-half' : 'fa-clock'}`} style={{ marginRight: 6 }} />
-                      {payStatus === 'Approved' ? 'Renewal Fee Paid & Approved' : payStatus === 'Pending Approval' ? 'Payment Pending AGM Approval' : 'Renewal Fee Not Yet Paid'}
+                    <div style={{ fontSize: 12, fontWeight: 700, color: barColor }}>
+                      <i className={`fas ${barIcon}`} style={{ marginRight: 6 }} />
+                      {barText}
                     </div>
-                    {payStatus === 'Approved' && (
+                    {(isFullyPaid || isPartiallyPaid) && (
                       <div style={{ fontSize: 11.5, color: theme.text2, marginTop: 4 }}>
-                        Paid on {mc.renewal_paid_date} - Acknowledgement No: {mc.acknowledgement_no || '-'}
+                        Paid on {mc.renewal_paid_date || '-'} - Acknowledgement No: {mc.acknowledgement_no || '-'}
                       </div>
                     )}
                     {payStatus === 'Pending Approval' && (
@@ -2275,23 +3237,188 @@ export default function MComManagement({ currentUser }) {
                         Payment recorded on {mc.renewal_paid_date}
                       </div>
                     )}
+                    {payStatus === 'Rejected' && (
+                      <div style={{ fontSize: 11.5, color: '#dc2626', marginTop: 4 }}>
+                        Reason: {mc.renewal_rejection_reason || 'No reason provided'}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {(isFullyPaid || isPartiallyPaid || (payStatus === 'Approved' && mc.acknowledgement_no)) && (
+                      <button
+                        onClick={() => {
+                          const yearsList = multiRows ? multiRows.map(r => r.year) : [];
+                          const startPaidYear = yearsList.length > 0 ? Math.min(...yearsList) : (mc.renewal_paid_year || getServerDate().getFullYear());
+                          const endPaidYear = mc.renewal_paid_year || (yearsList.length > 0 ? Math.max(...yearsList) : getServerDate().getFullYear());
+                          const displayAmount = (mc.renewal_paid_amount && parseFloat(mc.renewal_paid_amount) > 0)
+                            ? mc.renewal_paid_amount
+                            : grandTotal;
+
+                          setAckOverrides({
+                            refNo: mc.new_file_no || mc.file_no || mc.acknowledgement_no || '',
+                            date: mc.acknowledgement_date || getServerDate().toISOString().slice(0, 10),
+                            year: String(endPaidYear),
+                            yearFrom: String(startPaidYear),
+                            yearTo: String(endPaidYear),
+                            amount: displayAmount ? Number(displayAmount).toLocaleString('en-LK', { minimumFractionDigits: 2 }) : '0.00',
+                            paidDate: mc.renewal_paid_date || getServerDate().toISOString().slice(0, 10),
+                            signName: 'Samantha Ampagala',
+                            signTitle1: 'Assistant General Manager (Customer Care) ',
+                            signTitle2: 'Condominium Management Authority',
+                            toEmail: mc.email_address || mc.secretary_email || ''
+                          });
+                          setViewRecord(mc);
+                          setAckModalOpen(true);
+                        }}
+                        style={{ ...btnPrimary, background: '#1a3a6b', padding: '7px 12px', gap: 6, fontSize: 12 }}>
+                        <i className="fas fa-file-alt" /> View Acknowledgement
+                      </button>
+                    )}
                   </div>
                   {multiRows.length > 0 && (
-                    payStatus === 'Approved' ? null :
-                      payStatus === 'Pending Approval' ? (
-                        <button onClick={() => approveRenewalPayment(mc)} disabled={markingRenewalPaid}
-                          style={{ ...btnPrimary, background: '#16a34a', padding: '8px 14px', gap: 6 }}>
-                          {markingRenewalPaid ? <><i className="fas fa-spinner fa-spin" /> Saving...</> : <><i className="fas fa-check-double" /> Approve Payment</>}
-                        </button>
+                    (payStatus === 'Pending Approval') ? (
+                      canApprove ? (
+                        <div style={{ display: 'flex', gap: 8, flexDirection: 'column', alignItems: 'flex-end' }}>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button onClick={() => {
+                              setMcToReject(mc);
+                              setRejectReason('');
+                              setRejectOpen(true);
+                            }} disabled={markingRenewalPaid}
+                              style={{ ...btnPrimary, background: 'transparent', color: '#dc2626', border: '1px solid #ef4444', padding: '8px 14px', gap: 6 }}>
+                              {markingRenewalPaid ? <><i className="fas fa-spinner fa-spin" /> Saving...</> : <><i className="fas fa-times" /> Reject</>}
+                            </button>
+                            <button onClick={() => approveRenewalPayment(mc, multiRows)} disabled={markingRenewalPaid}
+                              style={{ ...btnPrimary, background: '#16a34a', padding: '8px 14px', gap: 6 }}>
+                              {markingRenewalPaid ? <><i className="fas fa-spinner fa-spin" /> Saving...</> : <><i className="fas fa-check-double" /> Approve Payment</>}
+                            </button>
+                          </div>
+                        </div>
                       ) : (
-                        <button
-                          onClick={() => markRenewalPaid(mc, someSelected ? selectedRows : multiRows)}
-                          disabled={markingRenewalPaid || (someSelected && selectedRows.length === 0)}
-                          style={{ ...btnPrimary, padding: '8px 14px', gap: 6, opacity: (markingRenewalPaid || (someSelected && selectedRows.length === 0)) ? 0.6 : 1 }}
-                        >
-                          {markingRenewalPaid ? <><i className="fas fa-spinner fa-spin" /> Saving...</> : <><i className="fas fa-hand-holding-usd" /> {someSelected ? `Mark Selected Paid - Rs. ${fmt(selectedTotal)}` : 'Mark as Paid'}</>}
-                        </button>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '8px 14px', fontSize: 12.5, fontWeight: 700, color: '#c2410c' }}>
+                            <i className="fas fa-hourglass-half" /> Awaiting AGM Approval
+                          </div>
+                          <div style={{ fontSize: 11, color: theme.text3 }}>The AGM has been notified. You will receive a notification once approved.</div>
+                        </div>
                       )
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-end', width: '100%' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', flexWrap: 'wrap' }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: theme.navy, whiteSpace: 'nowrap' }}>
+                            <i className="fas fa-calendar-plus" style={{ marginRight: 6 }} />
+                            {!hasRemainingYears ? 'Paid Years:' : isPartiallyPaid ? 'Mark Remaining Years as Paid:' : 'Select Years to Mark as Paid:'}
+                          </div>
+                          {(() => {
+                            let unpaidYears = [];
+                            if (originalMultiRows && originalMultiRows.length > 0) {
+                              unpaidYears = originalMultiRows.map(r => r.year);
+                            } else {
+                              const currentYear = getServerDate().getFullYear();
+                              const regYearStr = mc.reg_date ? mc.reg_date.split('-')[0] : (mc.year ? String(mc.year) : String(currentYear));
+                              const regYear = parseInt(regYearStr, 10);
+                              const paidYearsStr = mc.renewal_paid_years || String(mc.renewal_paid_year || '');
+                              const paidYears = paidYearsStr ? paidYearsStr.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y)) : [];
+                              for (let y = regYear; y <= currentYear; y++) {
+                                if (!paidYears.includes(y)) unpaidYears.push(y);
+                              }
+                            }
+
+                            let lastPaidYear = null;
+                            if (mc.renewal_period) {
+                              const match = String(mc.renewal_period).match(/\b(19|20)\d{2}\b/g);
+                              if (match) lastPaidYear = parseInt(match[match.length - 1], 10);
+                              else lastPaidYear = parseInt(mc.renewal_period, 10);
+                            }
+                            if (!lastPaidYear && mc.renewal_paid_year) {
+                              lastPaidYear = parseInt(mc.renewal_paid_year, 10);
+                            }
+                            if (!lastPaidYear && (isFullyPaid || isActiveStatus)) {
+                              lastPaidYear = new Date().getFullYear();
+                            }
+
+                            const allYears = new Set([...unpaidYears]);
+                            if (lastPaidYear && !unpaidYears.includes(lastPaidYear)) {
+                              allYears.add(lastPaidYear);
+                            }
+
+                            const maxCurrentYear = Math.max(lastPaidYear || new Date().getFullYear(), ...unpaidYears, new Date().getFullYear());
+                            allYears.add(maxCurrentYear + 1);
+                            allYears.add(maxCurrentYear + 2);
+
+                            const paidYearsStr = mc.renewal_paid_years || String(mc.renewal_paid_year || '');
+                            const paidYearsList = paidYearsStr.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y));
+                            paidYearsList.forEach(y => allYears.add(y));
+
+                            const sortedYears = Array.from(allYears).sort((a, b) => a - b);
+
+                            if (sortedYears.length === 0) return <span style={{ fontSize: 11, color: theme.text3, fontWeight: 600 }}>No years to display</span>;
+
+                            return (
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                {sortedYears.map(y => {
+                                  const isAlreadyPaid = paidYearsList.includes(y) || (lastPaidYear && y <= lastPaidYear && !unpaidYears.includes(y));
+                                  const isSel = selectedRenewalYears.includes(y);
+
+                                  if (isAlreadyPaid) {
+                                    return (
+                                      <button
+                                        key={y}
+                                        disabled
+                                        style={{
+                                          padding: '4px 10px',
+                                          borderRadius: 6,
+                                          border: `1px solid ${theme.green}`,
+                                          background: '#f0fdf4',
+                                          color: theme.green,
+                                          fontSize: 11,
+                                          fontWeight: 700,
+                                          cursor: 'not-allowed',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: 4
+                                        }}
+                                      >
+                                        <i className="fas fa-check" /> {y}
+                                      </button>
+                                    );
+                                  }
+
+                                  return (
+                                    <button
+                                      key={y}
+                                      onClick={() => setSelectedRenewalYears(prev => isSel ? prev.filter(x => x !== y) : [...prev, y])}
+                                      style={{
+                                        padding: '4px 10px',
+                                        borderRadius: 6,
+                                        border: `1px solid ${isSel ? theme.navy : theme.border}`,
+                                        background: isSel ? theme.navy : '#fff',
+                                        color: isSel ? '#fff' : theme.text,
+                                        fontSize: 11,
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s'
+                                      }}
+                                    >
+                                      {y}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                        {(canRenewal || canEdit) && (
+                          <button
+                            disabled={markingRenewalPaid || selectedRenewalYears.length === 0}
+                            onClick={() => markRenewalPaid(mc, someSelected ? selectedRows : multiRows)}
+                            style={{ background: '#f59e0b', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, opacity: (markingRenewalPaid || selectedRenewalYears.length === 0) ? 0.6 : 1, cursor: (markingRenewalPaid || selectedRenewalYears.length === 0) ? 'not-allowed' : 'pointer' }}
+                          >
+                            {markingRenewalPaid ? <><i className="fas fa-spinner fa-spin" /> Saving...</> : <><i className="fas fa-hand-holding-usd" /> Mark as Paid</>}
+                          </button>
+                        )}
+                      </div>
+                    )
                   )}
                 </div>
 
@@ -2305,6 +3432,565 @@ export default function MComManagement({ currentUser }) {
         <div style={{ position: 'fixed', bottom: 22, right: 22, zIndex: 9999, background: '#fff', border: `1px solid ${theme.border}`, borderLeft: `4px solid ${toast.type === 'error' ? theme.red : toast.type === 'info' ? theme.blue : theme.green}`, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 8px 30px rgba(0,0,0,.12)', minWidth: 240 }}>
           <i className={`fas fa-${toast.type === 'error' ? 'times-circle' : 'check-circle'}`} style={{ color: toast.type === 'error' ? theme.red : theme.green, fontSize: 15 }} />
           <span style={{ fontSize: 13, fontWeight: 700 }}>{toast.msg}</span>
+        </div>
+      )}
+
+      {/* Acknowledgement Letter Modal */}
+      {ackModalOpen && viewRecord && (
+        <div className="mc-overlay" onClick={(e) => e.target === e.currentTarget && setAckModalOpen(false)}>
+          <div className="mc-modal" style={{ maxWidth: 720, display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
+            <div className="mc-modal-header">
+              <span style={{ fontSize: 16, fontWeight: 700 }}>Acknowledgement Letter</span>
+              <button onClick={() => setAckModalOpen(false)} className="mc-close-btn"><i className="fas fa-times" /></button>
+            </div>
+            <div style={{ padding: 22, overflowY: 'auto', flex: 1 }}>
+              <>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginBottom: 14 }}>
+                  <button onClick={emailAcknowledgement} className="mc-btn-primary" style={{ padding: '9px 14px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '5px' }}><i className="fas fa-envelope" /> Email Acknowledgement</button>
+                  <button onClick={printAcknowledgement} className="mc-btn-primary" style={{ padding: '9px 14px' }} disabled={printingAck}><i className="fas fa-print" /> Print Acknowledgement</button>
+                </div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 15, background: '#f8fafc', padding: 15, borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                  <div style={{ width: '100%', fontSize: 13, fontWeight: 'bold', marginBottom: 5, color: '#334155' }}>Edit Letter Variables:</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: '1 1 200px' }}>
+                    <label style={{ fontSize: 11, fontWeight: 'bold', color: '#64748b' }}>Recipient Email</label>
+                    <input type="text" className="mc-input" value={ackOverrides.toEmail ?? ''} onChange={(e) => setAckOverrides({ ...ackOverrides, toEmail: e.target.value })} />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: '1 1 200px' }}>
+                    <label style={{ fontSize: 11, fontWeight: 'bold', color: '#64748b' }}>Reference No.</label>
+                    <input type="text" className="mc-input" value={ackOverrides.refNo} onChange={(e) => setAckOverrides({ ...ackOverrides, refNo: e.target.value })} />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: '1 1 120px' }}>
+                    <label style={{ fontSize: 11, fontWeight: 'bold', color: '#64748b' }}>Letter Date</label>
+                    <input type="date" className="mc-input" value={ackOverrides.date} onChange={(e) => setAckOverrides({ ...ackOverrides, date: e.target.value })} />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: '1 1 100px' }}>
+                    <label style={{ fontSize: 11, fontWeight: 'bold', color: '#64748b' }}>Year (From)</label>
+                    <select className="mc-input"
+                      value={ackOverrides.yearFrom || ackOverrides.year}
+                      onChange={(e) => {
+                        const newYearFrom = e.target.value;
+                        const newYearTo = ackOverrides.yearTo || ackOverrides.year;
+                        let newAmount = ackOverrides.amount;
+                        if (viewRecord) {
+                          const fromY = parseInt(newYearFrom, 10);
+                          const toY = parseInt(newYearTo, 10);
+                          const maxYear = Math.max(new Date().getFullYear(), fromY, toY, 2030);
+                          const allRows = buildMcomMultiYearRows({ ...viewRecord, renewal_paid_year: '', renewal_paid_years: '', reg_date: '1990-01-01', year: '1990' }, settings, maxYear);
+                          if (!isNaN(fromY) && !isNaN(toY) && fromY <= toY) {
+                            let total = 0;
+                            for (let y = fromY; y <= toY; y++) {
+                              let row = allRows.find(r => r.year === y);
+                              if (row) {
+                                total += (row.total || 0);
+                              } else if (allRows.length > 0) {
+                                total += (allRows[allRows.length - 1].total || 0);
+                              }
+                            }
+                            if (total > 0) {
+                              newAmount = Number(total).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                            }
+                          }
+                        }
+                        setAckOverrides({ ...ackOverrides, yearFrom: newYearFrom, amount: newAmount });
+                      }}>
+                      {Array.from({ length: getServerDate().getFullYear() + 3 - 2010 }, (_, i) => getServerDate().getFullYear() + 2 - i).map(y => (
+                        <option key={y} value={y}>{y}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: '1 1 100px' }}>
+                    <label style={{ fontSize: 11, fontWeight: 'bold', color: '#64748b' }}>Year (To)</label>
+                    <select className="mc-input"
+                      value={ackOverrides.yearTo || ackOverrides.year}
+                      onChange={(e) => {
+                        const newYearTo = e.target.value;
+                        const newYearFrom = ackOverrides.yearFrom || ackOverrides.year;
+                        let newAmount = ackOverrides.amount;
+                        if (viewRecord) {
+                          const fromY = parseInt(newYearFrom, 10);
+                          const toY = parseInt(newYearTo, 10);
+                          const maxYear = Math.max(new Date().getFullYear(), fromY, toY, 2030);
+                          const allRows = buildMcomMultiYearRows({ ...viewRecord, renewal_paid_year: '', renewal_paid_years: '', reg_date: '1990-01-01', year: '1990' }, settings, maxYear);
+                          if (!isNaN(fromY) && !isNaN(toY) && fromY <= toY) {
+                            let total = 0;
+                            for (let y = fromY; y <= toY; y++) {
+                              let row = allRows.find(r => r.year === y);
+                              if (row) {
+                                total += (row.total || 0);
+                              } else if (allRows.length > 0) {
+                                total += (allRows[allRows.length - 1].total || 0);
+                              }
+                            }
+                            if (total > 0) {
+                              newAmount = Number(total).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                            }
+                          }
+                        }
+                        setAckOverrides({ ...ackOverrides, yearTo: newYearTo, year: newYearTo, amount: newAmount });
+                      }}>
+                      {Array.from({ length: getServerDate().getFullYear() + 3 - 2010 }, (_, i) => getServerDate().getFullYear() + 2 - i).map(y => (
+                        <option key={y} value={y}>{y}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: '1 1 120px' }}>
+                    <label style={{ fontSize: 11, fontWeight: 'bold', color: '#64748b' }}>Amount (Rs.)</label>
+                    <input type="text" className="mc-input" value={ackOverrides.amount} onChange={(e) => setAckOverrides({ ...ackOverrides, amount: e.target.value })} />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: '1 1 120px' }}>
+                    <label style={{ fontSize: 11, fontWeight: 'bold', color: '#64748b' }}>Paid Date</label>
+                    <input type="date" className="mc-input" value={ackOverrides.paidDate} onChange={(e) => setAckOverrides({ ...ackOverrides, paidDate: e.target.value })} />
+                  </div>
+                  <div style={{ width: '100%', display: 'flex', gap: 10, marginTop: 5 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: 1 }}>
+                      <label style={{ fontSize: 11, fontWeight: 'bold', color: '#64748b' }}>Signatory Name</label>
+                      <input type="text" className="mc-input" value={ackOverrides.signName} onChange={(e) => setAckOverrides({ ...ackOverrides, signName: e.target.value })} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: 1 }}>
+                      <label style={{ fontSize: 11, fontWeight: 'bold', color: '#64748b' }}>Signatory Title 1</label>
+                      <input type="text" className="mc-input" value={ackOverrides.signTitle1} onChange={(e) => setAckOverrides({ ...ackOverrides, signTitle1: e.target.value })} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: 1 }}>
+                      <label style={{ fontSize: 11, fontWeight: 'bold', color: '#64748b' }}>Signatory Title 2</label>
+                      <input type="text" className="mc-input" value={ackOverrides.signTitle2} onChange={(e) => setAckOverrides({ ...ackOverrides, signTitle2: e.target.value })} />
+                    </div>
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${theme.border}`, borderRadius: 10 }}>
+                  {renderAcknowledgementLetter(viewRecord)}
+                </div>
+              </>
+            </div>
+            <div style={{ padding: '14px 22px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end' }}>
+              <button onClick={() => setAckModalOpen(false)} className="mc-btn-outline">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MCom Renewal Letter Edit Modal ─────────────────────────────── */}
+      {rlLetterModalOpen && rlLetterRecord && (
+        <div className="mc-overlay" onClick={(e) => { if (e.target === e.currentTarget) setRlLetterModalOpen(false); }}>
+          <div className="mc-modal" style={{ maxWidth: 720, display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
+            <div className="mc-modal-header">
+              <span style={{ fontSize: 16, fontWeight: 700 }}>Edit Renewal Letter</span>
+              <span style={{ fontSize: 12, color: '#64748b', marginLeft: 8 }}>{rlLetterRecord.mc.new_file_no || rlLetterRecord.mc.file_no}</span>
+              <button onClick={() => setRlLetterModalOpen(false)} className="mc-close-btn"><i className="fas fa-times" /></button>
+            </div>
+            <div style={{ padding: 22, overflowY: 'auto', flex: 1 }}>
+              <>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginBottom: 14, alignItems: 'center' }}>
+                  {rlSaved && (
+                    <div style={{ fontSize: 12, color: '#16a34a', display: 'flex', alignItems: 'center', gap: 5, marginRight: 'auto' }}>
+                      <i className="fas fa-check-circle" /> Saved locally
+                    </div>
+                  )}
+                  {/* Undo Button */}
+                  <button
+                    onClick={() => { setRlOverrides(rlDefaultOverrides); setRlSaved(false); }}
+                    className="mc-btn-outline"
+                    style={{ padding: '9px 14px', borderRadius: '5px', color: '#b45309', borderColor: '#d97706' }}
+                    title="Reset all edits back to defaults"
+                  >
+                    <i className="fas fa-undo" /> Undo All
+                  </button>
+                  <button
+                    onClick={() => {
+                      saveMComRlOverrides(rlLetterRecord.mc, rlOverrides);
+                      setRlSaved(true);
+                      showToast('Letter settings saved!', 'success');
+                    }}
+                    className="mc-btn-outline"
+                    style={{ padding: '9px 14px', borderRadius: '5px' }}
+                  >
+                    <i className="fas fa-save" /> Save Changes
+                  </button>
+                  <button
+                    onClick={() => {
+                      saveMComRlOverrides(rlLetterRecord.mc, rlOverrides);
+                      setRlLetterModalOpen(false);
+                      printRenewalLetter(rlLetterRecord.mc, rlLetterRecord.multiRows, rlOverrides);
+                    }}
+                    className="mc-btn-primary"
+                    style={{ padding: '9px 14px' }}
+                  >
+                    <i className="fas fa-print" /> Print Letter
+                  </button>
+                </div>
+
+                {(() => {
+                  const parseToFloat = (val) => {
+                    if (val == null) return 0;
+                    const clean = String(val).replace(/,/g, '').replace(/Rs\.?/gi, '').replace(/\/-|=/g, '').trim();
+                    const parsed = parseFloat(clean);
+                    return isNaN(parsed) ? 0 : parsed;
+                  };
+
+                  const formatDotDate = (dStr) => {
+                    if (!dStr) return '';
+                    const d = new Date(dStr);
+                    if (Number.isNaN(d.getTime())) return dStr;
+                    return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '.');
+                  };
+                  const displayRows = rlOverrides.tableRows || [];
+                  const preDisplayRows = displayRows.filter(r => r.isPre);
+                  const postDisplayRows = displayRows.filter(r => !r.isPre);
+
+                  const firstYear = rlLetterRecord.multiRows.length > 0 ? rlLetterRecord.multiRows[0].year : getServerDate().getFullYear();
+                  const lastYear = rlLetterRecord.multiRows.length > 0 ? rlLetterRecord.multiRows[rlLetterRecord.multiRows.length - 1].year : getServerDate().getFullYear();
+                  const periodLabel = firstYear === lastYear
+                    ? `(01/01/${lastYear} - 31/12/${lastYear})`
+                    : `(01/01/${firstYear} - 31/12/${lastYear})`;
+
+                  const onUpdateOverrides = (patch) => {
+                    setRlOverrides(prev => ({ ...prev, ...patch }));
+                  };
+
+                  const updateTableCell = (globalIdx, field) => (e) => {
+                    const val = e.currentTarget.innerText.trim();
+                    const newRows = displayRows.map((r, i) =>
+                      i === globalIdx ? { ...r, [field]: val } : r
+                    );
+                    onUpdateOverrides({ tableRows: newRows });
+                  };
+
+                  const tdEdit = (globalIdx, field, value) => (
+                    <td
+                      contentEditable
+                      suppressContentEditableWarning
+                      style={{ minWidth: 30, cursor: 'text', outline: 'none' }}
+                      onBlur={updateTableCell(globalIdx, field)}
+                      dangerouslySetInnerHTML={{ __html: String(value) }}
+                    />
+                  );
+
+                  const refDisplay = rlOverrides.refNo || (rlLetterRecord.mc.new_file_no || rlLetterRecord.mc.file_no || '-');
+                  const dateDisplay = rlOverrides.date ? formatDotDate(rlOverrides.date) : formatDotDate(getServerDate().toISOString().slice(0, 10));
+                  const signName = rlOverrides.signName || 'Arct.M.T. Kapila Priyantha';
+                  const signTitle1 = rlOverrides.signTitle1 || 'General Manager';
+                  const signTitle2 = rlOverrides.signTitle2 || 'Condominium Management Authority';
+                  const addressLines = String(rlLetterRecord.mc.address || '').split(/\r?\n|,/).map(l => l.trim()).filter(Boolean);
+
+                  const editableStyle = {
+                    outline: 'none',
+                    borderRadius: 3,
+                    cursor: 'text',
+                    minWidth: 10,
+                    display: 'inline-block',
+                  };
+                  const editableBlockStyle = {
+                    outline: 'none',
+                    borderRadius: 3,
+                    cursor: 'text',
+                    minWidth: 10,
+                  };
+
+                  const fmt = (n) => (n != null ? Number(n).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-');
+
+                  return (
+                    <>
+                      <div style={{ marginBottom: 10, padding: '8px 12px', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, fontSize: 12, color: '#0369a1', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <i className="fas fa-pencil-alt" style={{ fontSize: 11 }} />
+                        Click on any text in the letter below to edit it directly. Changes are reflected immediately.
+                      </div>
+                      <div style={{ border: `1px solid ${theme.border}`, borderRadius: 10, padding: '20px 24px', background: '#fff' }}>
+                        <div className="official-letter" style={{ fontFamily: 'Times New Roman, serif', fontSize: 15, lineHeight: 1.6 }}>
+                          <div className="ol-ref" style={{ overflow: 'hidden', fontWeight: 700, marginBottom: 12 }}>
+                            <span
+                              contentEditable
+                              suppressContentEditableWarning
+                              style={{ ...editableStyle, float: 'left' }}
+                              onBlur={(e) => onUpdateOverrides({ refNo: e.currentTarget.innerText.trim() })}
+                            >{refDisplay}</span>
+                            <span
+                              contentEditable
+                              suppressContentEditableWarning
+                              style={{ ...editableStyle, float: 'right' }}
+                              onBlur={(e) => onUpdateOverrides({ date: e.currentTarget.innerText.trim() })}
+                            >{dateDisplay}</span>
+                          </div>
+
+                          <div
+                            className="ol-addr"
+                            contentEditable
+                            suppressContentEditableWarning
+                            style={{ ...editableBlockStyle, marginBottom: 12 }}
+                          >
+                            <div>The Secretary,</div>
+                            <div>{rlLetterRecord.mc.management_corporation_name}</div>
+                            {addressLines.map((l, i) => <div key={i}>{l}</div>)}
+                          </div>
+
+                          <div
+                            className="ol-title"
+                            contentEditable
+                            suppressContentEditableWarning
+                            style={{ ...editableBlockStyle, fontWeight: 700, textDecoration: 'underline', marginBottom: 10 }}
+                          >
+                            RENEWAL REGISTRATION OF THE MANAGEMENT COMMITTEE FOR YEAR<br />{periodLabel}
+                          </div>
+
+                          <p
+                            className="ol-para"
+                            contentEditable
+                            suppressContentEditableWarning
+                            style={{ ...editableBlockStyle, marginBottom: 12 }}
+                            onBlur={(e) => onUpdateOverrides({ bodyParagraph1: e.currentTarget.innerText })}
+                            dangerouslySetInnerHTML={{ __html: rlOverrides.bodyParagraph1 }}
+                          />
+
+                          {/* Pre-2023 grouped table */}
+                          {preDisplayRows.length > 0 && (
+                            <>
+                              <p className="ol-section" style={{ fontWeight: 700, margin: '10px 0 4px' }}>Period {preDisplayRows[0].yearLabel}{preDisplayRows.length > 1 ? ` - ${preDisplayRows[preDisplayRows.length - 1].yearLabel}` : ''}</p>
+                              <table className="ol-table" style={{ width: '100%', borderCollapse: 'collapse', margin: '6px 0 12px', fontSize: 13 }}>
+                                <thead>
+                                  <tr style={{ background: '#f4f4f4' }}>
+                                    <th rowSpan="2" style={{ border: '1px solid #444', padding: '4px 6px', fontWeight: 700 }}>Year</th>
+                                    <th colSpan="5" style={{ border: '1px solid #444', padding: '4px 6px', fontWeight: 700 }}>Renewal fee</th>
+                                  </tr>
+                                  <tr style={{ background: '#f4f4f4' }}>
+                                    <th style={{ border: '1px solid #444', padding: '4px 6px', fontWeight: 700 }}>No of Units</th>
+                                    <th style={{ border: '1px solid #444', padding: '4px 6px', fontWeight: 700 }}>Amount Rs: Cts:</th>
+                                    <th style={{ border: '1px solid #444', padding: '4px 6px', fontWeight: 700 }}>SSCL ({SSCL_RATE * 100}%)</th>
+                                    <th style={{ border: '1px solid #444', padding: '4px 6px', fontWeight: 700 }}>VAT {VAT_RATE * 100}%</th>
+                                    <th style={{ border: '1px solid #444', padding: '4px 6px', fontWeight: 700 }}>Total Rs: Cts:</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {preDisplayRows.map((row, idx) => {
+                                    const globalIdx = displayRows.indexOf(row);
+                                    return (
+                                      <tr key={idx}>
+                                        {tdEdit(globalIdx, 'yearLabel', row.yearLabel)}
+                                        {tdEdit(globalIdx, 'units', row.units)}
+                                        {tdEdit(globalIdx, 'fee', fmt(row.fee))}
+                                        {tdEdit(globalIdx, 'sscl', fmt(row.sscl))}
+                                        {tdEdit(globalIdx, 'vat', fmt(row.vat))}
+                                        {tdEdit(globalIdx, 'total', fmt(row.total))}
+                                      </tr>
+                                    );
+                                  })}
+                                  <tr className="ol-total-row" style={{ fontWeight: 700, background: '#f9f9f9' }}>
+                                    <td colSpan="2" style={{ border: '1px solid #444', padding: '4px 6px', textAlign: 'center' }}>Total</td>
+                                    <td style={{ border: '1px solid #444', padding: '4px 6px', textAlign: 'center' }}>{fmt(preDisplayRows.reduce((s, r) => s + parseToFloat(r.fee), 0))}</td>
+                                    <td style={{ border: '1px solid #444', padding: '4px 6px', textAlign: 'center' }}>{fmt(preDisplayRows.reduce((s, r) => s + parseToFloat(r.sscl), 0))}</td>
+                                    <td style={{ border: '1px solid #444', padding: '4px 6px', textAlign: 'center' }}>{fmt(preDisplayRows.reduce((s, r) => s + parseToFloat(r.vat), 0))}</td>
+                                    <td style={{ border: '1px solid #444', padding: '4px 6px', textAlign: 'center' }}>{fmt(preDisplayRows.reduce((s, r) => s + parseToFloat(r.total), 0))}</td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </>
+                          )}
+
+                          {preDisplayRows.length > 0 && postDisplayRows.length > 0 && (
+                            <p className="ol-para" style={{ margin: '14px 0', textAlign: 'justify' }}>We wish to inform you that charges have been revised and are applicable per unit basis from 01.03.2023 as follows.</p>
+                          )}
+
+                          {/* Post-2023 individual years table */}
+                          {postDisplayRows.length > 0 && (
+                            <>
+                              <p className="ol-section" style={{ fontWeight: 700, margin: '10px 0 4px' }}>Period {postDisplayRows[0].yearLabel}{postDisplayRows.length > 1 ? ` - ${postDisplayRows[postDisplayRows.length - 1].yearLabel}` : ''}</p>
+                              <table className="ol-table" style={{ width: '100%', borderCollapse: 'collapse', margin: '6px 0 12px', fontSize: 13 }}>
+                                <thead>
+                                  <tr style={{ background: '#f4f4f4' }}>
+                                    <th rowSpan="2" style={{ border: '1px solid #444', padding: '4px 6px', fontWeight: 700 }}>Year</th>
+                                    <th colSpan="5" style={{ border: '1px solid #444', padding: '4px 6px', fontWeight: 700 }}>Renewal fee</th>
+                                  </tr>
+                                  <tr style={{ background: '#f4f4f4' }}>
+                                    <th style={{ border: '1px solid #444', padding: '4px 6px', fontWeight: 700 }}>No of Units</th>
+                                    <th style={{ border: '1px solid #444', padding: '4px 6px', fontWeight: 700 }}>Amount Rs: Cts:</th>
+                                    <th style={{ border: '1px solid #444', padding: '4px 6px', fontWeight: 700 }}>SSCL ({SSCL_RATE * 100}%)</th>
+                                    <th style={{ border: '1px solid #444', padding: '4px 6px', fontWeight: 700 }}>VAT {VAT_RATE * 100}%</th>
+                                    <th style={{ border: '1px solid #444', padding: '4px 6px', fontWeight: 700 }}>Total Rs: Cts:</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {postDisplayRows.map((row, idx) => {
+                                    const globalIdx = displayRows.indexOf(row);
+                                    return (
+                                      <tr key={idx}>
+                                        {tdEdit(globalIdx, 'yearLabel', row.yearLabel)}
+                                        {tdEdit(globalIdx, 'units', row.units)}
+                                        {tdEdit(globalIdx, 'fee', fmt(row.fee))}
+                                        {tdEdit(globalIdx, 'sscl', fmt(row.sscl))}
+                                        {tdEdit(globalIdx, 'vat', fmt(row.vat))}
+                                        {tdEdit(globalIdx, 'total', fmt(row.total))}
+                                      </tr>
+                                    );
+                                  })}
+                                  <tr className="ol-total-row" style={{ fontWeight: 700, background: '#f9f9f9' }}>
+                                    <td colSpan="2" style={{ border: '1px solid #444', padding: '4px 6px', textAlign: 'center' }}>Total</td>
+                                    <td style={{ border: '1px solid #444', padding: '4px 6px', textAlign: 'center' }}>{fmt(postDisplayRows.reduce((s, r) => s + parseToFloat(r.fee), 0))}</td>
+                                    <td style={{ border: '1px solid #444', padding: '4px 6px', textAlign: 'center' }}>{fmt(postDisplayRows.reduce((s, r) => s + parseToFloat(r.sscl), 0))}</td>
+                                    <td style={{ border: '1px solid #444', padding: '4px 6px', textAlign: 'center' }}>{fmt(postDisplayRows.reduce((s, r) => s + parseToFloat(r.vat), 0))}</td>
+                                    <td style={{ border: '1px solid #444', padding: '4px 6px', textAlign: 'center' }}>{fmt(postDisplayRows.reduce((s, r) => s + parseToFloat(r.total), 0))}</td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </>
+                          )}
+
+                          <p
+                            className="ol-para"
+                            contentEditable
+                            suppressContentEditableWarning
+                            style={{ ...editableBlockStyle, marginBottom: 12 }}
+                            onBlur={(e) => onUpdateOverrides({ bodyParagraph2: e.currentTarget.innerText })}
+                            dangerouslySetInnerHTML={{ __html: rlOverrides.bodyParagraph2 }}
+                          />
+
+                          <p className="ol-para" style={{ marginBottom: 8 }}>Thank You.</p>
+                          <p className="ol-para" style={{ marginBottom: 8 }}>Yours Faithfully,</p>
+
+                          <div
+                            className="ol-sign"
+                            contentEditable
+                            suppressContentEditableWarning
+                            style={{ ...editableBlockStyle, marginTop: 20 }}
+                            onBlur={(e) => {
+                              const lines = e.currentTarget.innerText.split('\n').filter(l => l.trim());
+                              onUpdateOverrides({
+                                signName: lines[0] || signName,
+                                signTitle1: lines[1] || signTitle1,
+                                signTitle2: lines[2] || signTitle2,
+                              });
+                            }}
+                          >
+                            <div style={{ height: 35 }} />
+                            <div><strong>{signName}</strong></div>
+                            <div><strong>{signTitle1}</strong></div>
+                            <div><strong>{signTitle2}</strong></div>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
+              </>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reject reason modal */}
+      {rejectOpen && mcToReject && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.5)', zIndex: 410, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div style={{ background: '#fff', borderRadius: 12, width: '100%', maxWidth: 420, padding: 20, boxShadow: '0 24px 70px rgba(0,0,0,.3)' }}>
+            <div style={{ fontWeight: 700, fontSize: 14.5, color: theme.text, marginBottom: 10 }}>Reject Renewal Payment</div>
+            <textarea
+              rows={3}
+              placeholder="Reason for rejection (Required)"
+              value={rejectReason}
+              onChange={e => setRejectReason(e.target.value)}
+              style={{ width: '100%', border: `1px solid ${theme.border}`, borderRadius: 8, padding: '10px 12px', fontSize: 13, boxSizing: 'border-box', resize: 'vertical' }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
+              <button onClick={() => { setRejectOpen(false); setRejectReason(''); setMcToReject(null); }} className="mc-btn-outline" style={{ padding: '7px 16px', background: 'transparent', border: '1px solid #d1d5db', borderRadius: 6, cursor: 'pointer' }}>Cancel</button>
+              <button onClick={() => {
+                rejectRenewalPayment(mcToReject, rejectReason);
+                setRejectOpen(false);
+              }} disabled={markingRenewalPaid || !rejectReason.trim()} className="mc-btn-primary" style={{ background: '#dc2626', color: '#fff', border: 'none', padding: '7px 16px', borderRadius: 6, cursor: (markingRenewalPaid || !rejectReason.trim()) ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: (markingRenewalPaid || !rejectReason.trim()) ? 0.6 : 1 }}>
+                {markingRenewalPaid ? 'Rejecting...' : 'Confirm Reject'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Email Preview Modal */}
+      {emailPreview && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.5)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div style={{ background: '#fff', borderRadius: 12, width: '100%', maxWidth: 650, padding: 0, boxShadow: '0 24px 70px rgba(0,0,0,.3)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
+            <div style={{ padding: '16px 20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
+              <span style={{ fontSize: 16, fontWeight: 700, color: theme.navy }}><i className="fas fa-paper-plane" style={{ marginRight: 8, color: '#3b82f6' }} /> Preview Email</span>
+              <button onClick={() => !sendingEmail && setEmailPreview(null)} style={{ background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: theme.text3 }}>✕</button>
+            </div>
+
+            <div style={{ padding: 20, overflowY: 'auto', flex: 1 }}>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 12, color: theme.text2, fontWeight: 600, marginBottom: 4 }}>To:</div>
+                <div style={{ padding: '8px 12px', background: '#f1f5f9', borderRadius: 6, fontSize: 14, border: `1px solid ${theme.border}` }}>
+                  {emailPreview.toEmail}
+                </div>
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 12, color: theme.text2, fontWeight: 600, marginBottom: 4 }}>Subject:</div>
+                <div style={{ padding: '8px 12px', background: '#f1f5f9', borderRadius: 6, fontSize: 14, border: `1px solid ${theme.border}`, fontWeight: 600 }}>
+                  {emailPreview.subject}
+                </div>
+              </div>
+
+              <div style={{ fontSize: 12, color: theme.text2, fontWeight: 600, marginBottom: 4 }}>Attachment:</div>
+              <div
+                onClick={() => {
+                  if (!emailPreview?.pdfBase64) return;
+                  let b64 = emailPreview.pdfBase64;
+                  if (b64.includes(',')) b64 = b64.split(',')[1];
+                  const byteCharacters = atob(b64);
+                  const byteNumbers = new Array(byteCharacters.length);
+                  for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                  }
+                  const byteArray = new Uint8Array(byteNumbers);
+                  const blob = new Blob([byteArray], { type: 'application/pdf' });
+                  const blobUrl = URL.createObjectURL(blob);
+                  window.open(blobUrl, '_blank');
+                }}
+                style={{ padding: '10px 14px', background: '#e0e7ff', border: '1px solid #c7d2fe', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, cursor: 'pointer', transition: '0.2s' }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#c7d2fe'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#e0e7ff'}
+                title="Click to view/download PDF"
+              >
+                <i className="fas fa-file-pdf" style={{ color: '#ef4444', fontSize: 20 }} />
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#4338ca' }}>{emailPreview.pdfFileName}</div>
+                  <div style={{ fontSize: 11, color: '#6366f1' }}>PDF Document (Click to view/download)</div>
+                </div>
+              </div>
+
+              <div style={{ fontSize: 12, color: theme.text2, fontWeight: 600, marginBottom: 4 }}>Email Body:</div>
+              <div style={{ border: `1px solid ${theme.border}`, borderRadius: 8, padding: 16, background: '#fff' }} dangerouslySetInnerHTML={{ __html: emailPreview.htmlBody }} />
+            </div>
+
+            <div style={{ padding: '14px 20px', borderTop: `1px solid ${theme.border}`, background: '#f8fafc', display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+              <button onClick={() => setEmailPreview(null)} disabled={sendingEmail} className="mc-btn-outline" style={{ padding: '8px 16px', borderRadius: 6, border: '1px solid #cbd5e1', cursor: sendingEmail ? 'not-allowed' : 'pointer', background: '#fff' }}>Cancel</button>
+              <button onClick={confirmSendEmail} disabled={sendingEmail} className="mc-btn-primary" style={{ padding: '8px 18px', borderRadius: 6, background: '#3b82f6', color: '#fff', border: 'none', fontWeight: 600, cursor: sendingEmail ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, opacity: sendingEmail ? 0.7 : 1 }}>
+                {sendingEmail ? <i className="fas fa-spinner fa-spin" /> : <i className="fas fa-paper-plane" />}
+                {sendingEmail ? 'Sending...' : 'Confirm & Send Email'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isImporting && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 10000,
+          background: 'rgba(255,255,255,0.82)', backdropFilter: 'blur(6px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: 18, boxShadow: '0 8px 40px rgba(26,58,107,0.18)',
+            padding: '40px 52px', display: 'flex', flexDirection: 'column',
+            alignItems: 'center', gap: 18, minWidth: 280,
+          }}>
+            <div style={{
+              width: 56, height: 56, borderRadius: '50%',
+              border: '5px solid #e2e8f0', borderTopColor: theme.navy,
+              animation: 'cma-spin 0.85s linear infinite',
+            }} />
+            <div style={{ fontSize: 17, fontWeight: 700, color: theme.text, letterSpacing: 0.1 }}>Importing Data...</div>
+            <div style={{ fontSize: 13, color: theme.text2, marginTop: -6 }}>Please wait while the records are being processed.</div>
+            <div style={{ width: '100%', height: 4, background: '#e2e8f0', borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', width: '40%',
+                background: `linear-gradient(90deg, ${theme.navy}, #2563eb)`,
+                borderRadius: 4,
+                animation: 'cma-progress 1.4s ease-in-out infinite',
+              }} />
+            </div>
+          </div>
         </div>
       )}
     </div>
