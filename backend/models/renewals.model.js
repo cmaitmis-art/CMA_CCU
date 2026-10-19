@@ -1,8 +1,8 @@
 module.exports = (sequelize, DataTypes) => {
   const Renewal = sequelize.define('Renewal', {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-    ref_no: { type: DataTypes.TEXT, allowNull: false, unique: true },
-    status: { type: DataTypes.TEXT, defaultValue: 'pending_approval' },
+    ref_no: { type: DataTypes.STRING, allowNull: false, unique: true },
+    status: { type: DataTypes.STRING, defaultValue: 'pending_approval' },
     applicant_name: { type: DataTypes.TEXT },
     applicant_email: { type: DataTypes.TEXT },
     applicant_phone: { type: DataTypes.TEXT },

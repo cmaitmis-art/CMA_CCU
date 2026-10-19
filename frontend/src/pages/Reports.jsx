@@ -122,7 +122,7 @@ const CARDS = [
   { type: 'full', icon: 'fa-layer-group', color: '#7c3aed', bg: '#f5f3ff', title: 'Summary', sub: 'All Modules' },
 ];
 
-const DATE_KEYS = ['reg_date', 'date', 'agm_date', 'next_agm_date', 'complaint_date', 'resolution_date'];
+const DATE_KEYS = ['reg_date', 'date', 'agm_date', 'next_agm_date', 'next_renewal_date', 'complaint_date', 'resolution_date', 'renewal_paid_date', 'acknowledgement_date', 'land_registry_approved_date', 'awareness_date', 'letter_date', 'received_ccu', 'reminder_date'];
 const NOWRAP_KEYS = [
   'file_no',
   'reg_date',
@@ -145,7 +145,29 @@ const NOWRAP_KEYS = [
   'attendance'
 ];
 
-const fmtDate = v => { const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? `${m[3]}/${m[2]}/${m[1]}` : String(v); };
+const fmtDate = v => {
+  if (!v) return '—';
+  const s = String(v).trim();
+  // Strip ISO timestamp: 2026-04-28T00:00:00.000Z → 2026-04-28
+  const isoStripped = s.replace(/T.*$/, '');
+  const isoMatch = isoStripped.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
+  // Handle JS date strings like "Wed Oct 11 2023 05:30:00 GMT+0530 (India Standard Time)"
+  // or any other parseable date string — extract date part using IST offset adjustment
+  try {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      // Use UTC+5:30 offset (IST) to get the correct local date
+      const offsetMs = 5.5 * 60 * 60 * 1000;
+      const local = new Date(d.getTime() + offsetMs);
+      const dd = String(local.getUTCDate()).padStart(2, '0');
+      const mm = String(local.getUTCMonth() + 1).padStart(2, '0');
+      const yyyy = local.getUTCFullYear();
+      return `${dd}/${mm}/${yyyy}`;
+    }
+  } catch (_) {}
+  return s;
+};
 
 // Repairs the classic "double-encoding" corruption: original UTF-8 bytes for
 // Sinhala text got misread as Windows-1252/Latin-1 upstream (DB/API/CSV import)
@@ -609,7 +631,7 @@ function DataTable({ rows, fields }) {
   const [search, setSearch] = useState('');
   const [sfStatus, setSfStatus] = useState('');
   const [sfYear, setSfYear] = useState('');
-  const [expanded, setExpanded] = useState({});
+  const [expandedRow, setExpandedRow] = useState(null); // row object for modal
   const [selectedIds, setSelectedIds] = useState({});
   // Default to a manageable subset of fields (not everything) so the printed/
   // exported table isn't overcrowded — the user can still pick "Select All".
@@ -825,12 +847,12 @@ function DataTable({ rows, fields }) {
                       <td style={{ textAlign: 'center', padding: 8 }} onClick={(e) => e.stopPropagation()}>
                         <input id={`reports_row_sel_${rid}`} name={`reports_row_sel_${rid}`} aria-label={`Select row ${idx + 1}`} type="checkbox" checked={!!selectedIds[rid]} onChange={() => toggleRow(rid)} />
                       </td>
-                      <td style={{ textAlign: 'center', color: 'var(--text3)', padding: 8, cursor: 'pointer' }} onClick={() => setExpanded(p => ({ ...p, [rid]: !p[rid] }))}>
-                        <i className={`fas fa-chevron-${expanded[rid] ? 'up' : 'down'}`} style={{ fontSize: 10 }} />
+                      <td style={{ textAlign: 'center', color: 'var(--text3)', padding: 8, cursor: 'pointer' }} onClick={() => setExpandedRow(row)}>
+                        <i className="fas fa-chevron-right" style={{ fontSize: 10 }} />
                       </td>
-                      <td style={{ padding: 8, color: 'var(--text3)', cursor: 'pointer' }} onClick={() => setExpanded(p => ({ ...p, [rid]: !p[rid] }))}>{idx + 1}</td>
+                      <td style={{ padding: 8, color: 'var(--text3)', cursor: 'pointer' }} onClick={() => setExpandedRow(row)}>{idx + 1}</td>
                       {effectiveFields.map(f => (
-                        <td key={f.key} onClick={() => setExpanded(p => ({ ...p, [rid]: !p[rid] }))} style={{
+                        <td key={f.key} onClick={() => setExpandedRow(row)} style={{
                           padding: 8, borderBottom: '1px solid var(--border)', cursor: 'pointer',
                           fontWeight: f.key === 'status' ? 700 : 400,
                           color: f.key === 'status' ? statusColor(fv(row, f.key)) : undefined,
@@ -841,20 +863,6 @@ function DataTable({ rows, fields }) {
                         </td>
                       ))}
                     </tr>
-                    {expanded[rid] && (
-                      <tr><td colSpan={effectiveFields.length + 3} style={{ padding: 0 }}>
-                        <div style={{ background: '#f8fafc', borderTop: '1px solid var(--border)', padding: '14px 16px' }}>
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 8 }}>
-                            {effectiveFields.map(f => (
-                              <div key={f.key} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 7, padding: '8px 10px' }}>
-                                <div style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text3)', fontWeight: 700, marginBottom: 2 }}>{f.label}</div>
-                                <div style={{ fontSize: 13, fontWeight: 600, color: f.key === 'status' ? statusColor(fv(row, f.key)) : 'var(--text)' }}>{fv(row, f.key)}</div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </td></tr>
-                    )}
                   </Fragment>
                 );
               })}
@@ -862,6 +870,59 @@ function DataTable({ rows, fields }) {
           </table>
         </div>
       }
+
+      {/* Row Detail Modal */}
+      {expandedRow && (
+        <div
+          onClick={() => setExpandedRow(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+            zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 20, backdropFilter: 'blur(2px)'
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'var(--card, #fff)', borderRadius: 14, boxShadow: '0 24px 60px rgba(0,0,0,0.28)',
+              maxWidth: 860, width: '100%', maxHeight: '85vh', display: 'flex', flexDirection: 'column',
+              overflow: 'hidden'
+            }}
+          >
+            {/* Modal Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid var(--border)', background: '#f8fafc' }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--navy, #1a1a2e)' }}>
+                <i className="fas fa-info-circle" style={{ marginRight: 8, color: '#3b82f6' }} />
+                Record Details
+              </div>
+              <button
+                onClick={() => setExpandedRow(null)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--text3)', lineHeight: 1, padding: '2px 6px', borderRadius: 6 }}
+                title="Close"
+              >
+                <i className="fas fa-times" />
+              </button>
+            </div>
+            {/* Modal Body */}
+            <div style={{ overflowY: 'auto', padding: '16px 20px', flex: 1 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
+                {effectiveFields.map(f => (
+                  <div key={f.key} style={{ background: '#f8fafc', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}>
+                    <div style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '.6px', color: 'var(--text3)', fontWeight: 700, marginBottom: 4 }}>{f.label}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: f.key === 'status' ? statusColor(fv(expandedRow, f.key)) : 'var(--text)', wordBreak: 'break-word' }}>
+                      {fv(expandedRow, f.key)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* Modal Footer */}
+            <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border)', background: '#f8fafc', display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="btn btn-sm" onClick={() => setExpandedRow(null)} style={{ fontWeight: 600 }}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1279,10 +1340,11 @@ export default function Reports({ currentUser }) {
     setLoading(true);
     try {
       if (type === 'full') {
-        const [mc, mcom, cf, comp] = await Promise.all([
-          apiFetch(`${API}/mc?limit=10000`), apiFetch(`${API}/mcom?limit=10000`),
-          apiFetch(`${API}/cfiles?limit=10000`), apiFetch(`${API}/complaints?limit=10000`),
-        ]);
+        // Fetch sequentially to prevent overwhelming the backend and database connection pool
+        const mc = await apiFetch(`${API}/mc?limit=10000`);
+        const mcom = await apiFetch(`${API}/mcom?limit=10000`);
+        const cf = await apiFetch(`${API}/cfiles?limit=10000`);
+        const comp = await apiFetch(`${API}/complaints?limit=10000`);
         setFullData({
           mc: normalizeRows(mc),
           mcom: normalizeRows(mcom),
@@ -1305,9 +1367,9 @@ export default function Reports({ currentUser }) {
   }), [fullData]);
 
   const cardStat = {
-    mc: stats.mc, mcom: stats.mcom, cf: stats.cfiles,
+    mc: stats.mcTotal || stats.mc, mcom: stats.mcom, cf: stats.cfiles,
     complaints: stats.pendingComplaints ?? 0,
-    full: (stats.mc ?? 0) + (stats.mcom ?? 0) + (stats.cfiles ?? 0) + (stats.pendingComplaints ?? 0),
+    full: (stats.mcTotal || stats.mc || 0) + (stats.mcom || 0) + (stats.cfiles || 0) + (stats.pendingComplaints || 0),
   };
 
   return (

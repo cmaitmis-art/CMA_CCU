@@ -1217,7 +1217,7 @@ export default function RegistrationForm({ currentUser, onNavigate }) {
           <div className="of-title">CONDOMINIUM MANAGEMENT AUTHORITY</div>
           <div className="of-subtitle">APPLICATION FOR REGISTRATION AS A MANAGEMENT CORPORATION</div>
         </div>
-        
+
         <div className="of-row" style={{ marginTop: 10 }}>
           <div className="of-label">1. Title name of the Management Corporation :-</div>
           <div className="of-value">{formData.name}</div>
@@ -1230,7 +1230,7 @@ export default function RegistrationForm({ currentUser, onNavigate }) {
           <div className="of-label">3. Official Address of the M/C :-</div>
           <div className="of-value">{formData.address}</div>
         </div>
-        
+
         <div className="of-section-title">4. Number of the parcels in the Condominium Complex,</div>
         <div className="of-sub-row">
           <div className="of-label">Residential :-</div>
@@ -1262,22 +1262,22 @@ export default function RegistrationForm({ currentUser, onNavigate }) {
         <div className="of-grid-2">
           <div className="of-checkbox"><div className="of-box">{formData.fac_common_parking ? '✓' : ''}</div> Common Parking</div>
           <div className="of-checkbox"><div className="of-box">{formData.fac_super_market ? '✓' : ''}</div> Super Market</div>
-          
+
           <div className="of-checkbox"><div className="of-box">{formData.fac_accessory_car_parcel ? '✓' : ''}</div> Accessory Car Parcel</div>
           <div className="of-checkbox"><div className="of-box">{formData.fac_garden ? '✓' : ''}</div> Garden</div>
-          
+
           <div className="of-checkbox"><div className="of-box">{formData.fac_roof_top ? '✓' : ''}</div> Roof Top</div>
           <div className="of-checkbox"><div className="of-box">{formData.fac_sauna ? '✓' : ''}</div> Sauna</div>
-          
+
           <div className="of-checkbox"><div className="of-box">{formData.fac_gym ? '✓' : ''}</div> Gym</div>
           <div className="of-checkbox"><div className="of-box">{formData.fac_salon ? '✓' : ''}</div> Salon</div>
-          
+
           <div className="of-checkbox"><div className="of-box">{formData.fac_swimming_pool ? '✓' : ''}</div> Swimming Pool</div>
           <div className="of-checkbox"><div className="of-box">{formData.fac_golf_tennis ? '✓' : ''}</div> Golf &amp; Tennis Ground</div>
-          
+
           <div className="of-checkbox"><div className="of-box">{formData.fac_penth_house ? '✓' : ''}</div> Penth House</div>
           <div className="of-checkbox"><div className="of-box">{formData.fac_day_care ? '✓' : ''}</div> Day Care Centers</div>
-          
+
           <div className="of-checkbox"><div className="of-box">{formData.fac_restaurant ? '✓' : ''}</div> Restaurant</div>
         </div>
 
@@ -1346,7 +1346,7 @@ export default function RegistrationForm({ currentUser, onNavigate }) {
 
         <div className="of-row" style={{ marginTop: 10 }}>
           <div className="of-label" style={{ whiteSpace: 'normal', fontWeight: 'normal', display: 'flex', alignItems: 'center' }}>
-            <span>7. Written assurance from secretary that Condominium Management Authority requirement will be fulfilled (attached)</span> 
+            <span>7. Written assurance from secretary that Condominium Management Authority requirement will be fulfilled (attached)</span>
             <div className="of-box" style={{ marginLeft: 10 }}>{formData.written_assurance_fulfilled ? '✓' : ''}</div>
           </div>
         </div>

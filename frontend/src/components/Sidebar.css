@@ -351,4 +351,8 @@
   .sidebar-overlay.open {
     display: block;
   }
+
+  .collapse-btn {
+    display: none;
+  }
 }

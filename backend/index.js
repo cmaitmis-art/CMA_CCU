@@ -29,6 +29,8 @@ if (sequelizeModule.Model && !sequelizeModule.Model.prototype.findByPk) {
 }
 
 const express = require('express');
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 require('dotenv').config();
 const cors = require('cors');
 const { Op } = require('sequelize'); // Imported for Sequelize operators
@@ -66,20 +68,41 @@ const userDraftsRoutes = require('./routes/userDrafts');
 const app = express();
 const port = process.env.PORT || 3001;
 
-// ── Configure Middleware ────────────────────────────────────────────────────
+// ── Configure CORS ──────────────────────────────────────────────────────────
+const customOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const allowedOriginsSet = new Set([
+  'https://ccu.cma.lk',
+  'http://ccu.cma.lk',
+  'https://cma.lk',
+  'http://cma.lk',
+  'https://www.cma.lk',
+  'http://www.cma.lk',
+  'https://cma-ccu.netlify.app',
+  ...customOrigins,
+]);
+
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl requests)
+    // Allow requests with no origin (like mobile apps, curl, server-to-server)
     if (!origin) return callback(null, true);
 
-    // Allow localhost and any private LAN IP on the frontend ports, plus the Netlify production URL
-    const allowedPattern = /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):(5173|5174)$/;
+    // Allow localhost and any private LAN IP on dev ports
+    const localhostLanPattern = /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/;
 
-    // Check if the origin matches the localhost pattern OR is the specific Netlify domain
-    if (allowedPattern.test(origin) || origin === 'https://cma-ccu.netlify.app') {
+    // Check against allowed origins, regex matching *.cma.lk, or LAN/localhost
+    if (
+      allowedOriginsSet.has(origin) ||
+      localhostLanPattern.test(origin) ||
+      /^https?:\/\/([a-z0-9-]+\.)*cma\.lk(:\d+)?$/i.test(origin)
+    ) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS: ' + origin));
+      console.warn(`[CORS] Request blocked from origin: ${origin}`);
+      callback(null, false);
     }
   },
   credentials: true,
@@ -103,6 +126,20 @@ app.use(fileUpload({
 app.use('/uploads', express.static(require('path').resolve(__dirname, 'uploads')));
 // (Optional safety) also expose reports uploads directly
 app.use('/uploads/reports', express.static(require('path').resolve(__dirname, 'uploads', 'reports')));
+
+// ── Static Frontend Serving (for cPanel Unified Deployment) ─────────────────
+const fs = require('fs');
+
+const frontendPublicPath = path.resolve(__dirname, 'public');
+const frontendDistPath = path.resolve(__dirname, '../frontend/dist');
+const resolvedFrontendPath = fs.existsSync(path.join(frontendPublicPath, 'index.html'))
+  ? frontendPublicPath
+  : (fs.existsSync(path.join(frontendDistPath, 'index.html')) ? frontendDistPath : null);
+
+if (resolvedFrontendPath) {
+  console.log(`📦 Serving frontend static assets from: ${resolvedFrontendPath}`);
+  app.use(express.static(resolvedFrontendPath));
+}
 
 
 // ── Mount API Routes ────────────────────────────────────────────────────────
@@ -171,9 +208,36 @@ app.get('/api/dashboard/stats', async (req, res) => {
   }
 });
 
-// ── GET / ─ Health Check Endpoint ───────────────────────────────────────────
-app.get('/', (req, res) => {
-  res.json({ message: 'Backend API is running', apiBase: '/api' });
+// ── Health Check Endpoint with Database Diagnostics ────────────────────────
+app.get('/api/health', async (req, res) => {
+  let dbStatus = 'connecting';
+  let dbError = null;
+  let userCount = null;
+  try {
+    await db.sequelize.authenticate();
+    dbStatus = 'connected';
+    if (db.models.User) {
+      userCount = await db.models.User.count().catch(() => null);
+    }
+  } catch (err) {
+    dbStatus = 'error';
+    dbError = err?.parent?.sqlMessage || err?.original?.message || err?.message || String(err);
+  }
+
+  res.json({
+    status: 'ok',
+    message: 'Backend API is running',
+    timestamp: new Date().toISOString(),
+    database: {
+      status: dbStatus,
+      error: dbError,
+      usersInDatabase: userCount,
+      host: process.env.DB_HOST || 'localhost',
+      port: process.env.DB_PORT || 3306,
+      database: process.env.DB_NAME || 'cmauser_ccu',
+      user: process.env.DB_USER || 'cmauser_ccuuser',
+    }
+  });
 });
 
 // ── GET /api/server-time ─ Provide Server Time to Frontend ──────────────
@@ -181,7 +245,28 @@ app.get('/api/server-time', (req, res) => {
   res.json({ serverTime: new Date().toISOString() });
 });
 
-// ── 404 Handler ─────────────────────────────────────────────────────────────
+// ── SPA Routing Fallback & 404 Handler ──────────────────────────────────────
+if (resolvedFrontendPath) {
+  // If React production build exists, serve index.html for all frontend routes
+  app.get('*', (req, res, next) => {
+    // Don't intercept API or upload routes
+    if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
+      return next();
+    }
+    res.sendFile(path.join(resolvedFrontendPath, 'index.html'), (err) => {
+      if (err && !res.headersSent) {
+        res.status(200).send('<!DOCTYPE html><html><head><title>CMA CCU</title></head><body><h1>CMA CCU System</h1><p>Application is running.</p></body></html>');
+      }
+    });
+  });
+} else {
+  // If running backend alone in dev mode
+  app.get('/', (req, res) => {
+    res.json({ message: 'Backend API is running', apiBase: '/api' });
+  });
+}
+
+// 404 for unhandled API endpoints
 app.use((req, res) => {
   res.status(404).json({ error: 'Not Found' });
 });
@@ -279,9 +364,117 @@ async function runRenewalStatusCheck(models) {
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // PHASE 1 — AUTO-RESTORE: Fix records that have a valid 2026+ payment but
-  //           are incorrectly stored as Non Active (e.g. due to a previous bug
-  //           or a startup check that ran before the approval was saved).
+  // PHASE 0 — AUTO-SYNC: Populate missing renewal_date_vise, agm_date_vise,
+  //           and next_renewal_date for existing records (Excel imports / legacy).
+  // ══════════════════════════════════════════════════════════════════════════
+  let mcSynced = 0;
+  let mcomSynced = 0;
+  const todayZero = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  try {
+    const allMcs = await ManagementCorporation.findAll({
+      attributes: ['id', 'status', 'renewal_period', 'next_agm_date', 'agm_date', 'renewal_date_vise', 'agm_date_vise', 'next_renewal_date', 'renewal_payment_status'],
+    });
+    for (const mc of allMcs) {
+      const updates = {};
+      const lastPaid = getLastPaidYear(mc);
+      const isPaidCurrent = (lastPaid !== null && lastPaid >= currentYear) || (mc.renewal_payment_status === 'Approved');
+
+      // 1. renewal_date_vise
+      if (!mc.renewal_date_vise || mc.renewal_date_vise.trim() === '' || mc.renewal_date_vise === '-') {
+        if (isPaidCurrent || mc.status === 'Active') {
+          updates.renewal_date_vise = 'Active';
+        } else if (lastPaid !== null && lastPaid < currentYear) {
+          updates.renewal_date_vise = 'Non Active';
+        }
+      }
+
+      // 2. next_renewal_date
+      if (!mc.next_renewal_date && lastPaid) {
+        updates.next_renewal_date = `${lastPaid}-12-31`;
+      }
+
+      // 3. agm_date_vise
+      if (!mc.agm_date_vise || mc.agm_date_vise.trim() === '' || mc.agm_date_vise === '-') {
+        if (mc.next_agm_date) {
+          const nextD = new Date(mc.next_agm_date);
+          if (!isNaN(nextD.getTime())) {
+            updates.agm_date_vise = nextD >= todayZero ? 'Active' : 'Non Active';
+          }
+        } else if (mc.agm_date) {
+          const agmD = new Date(mc.agm_date);
+          const oneYearAgo = new Date(todayZero);
+          oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+          if (!isNaN(agmD.getTime())) {
+            updates.agm_date_vise = agmD >= oneYearAgo ? 'Active' : 'Non Active';
+          }
+        }
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await mc.update(updates);
+        mcSynced++;
+      }
+    }
+  } catch (err) {
+    console.error('[RenewalStatusCheck] MC Phase 0 sync error:', err?.message || err);
+  }
+
+  try {
+    if (McomRecord) {
+      const allMcoms = await McomRecord.findAll({
+        attributes: ['id', 'status', 'renewal_period', 'agm_date', 'renewal_date_vise', 'agm_date_vise', 'active_non_active', 'renewal_status', 'agm_status', 'next_renewal_date', 'renewal_payment_status'],
+      });
+      for (const mcom of allMcoms) {
+        const updates = {};
+        const lastPaid = getLastPaidYear(mcom);
+        const isPaidCurrent = (lastPaid !== null && lastPaid >= currentYear) || (mcom.renewal_payment_status === 'Approved');
+
+        if (!mcom.renewal_date_vise || mcom.renewal_date_vise.trim() === '' || mcom.renewal_date_vise === '-') {
+          if (isPaidCurrent || mcom.status === 'Active') {
+            updates.renewal_date_vise = 'Active';
+          } else if (lastPaid !== null && lastPaid < currentYear) {
+            updates.renewal_date_vise = 'Non Active';
+          }
+        }
+        if (updates.renewal_date_vise) {
+          if (!mcom.active_non_active) updates.active_non_active = updates.renewal_date_vise;
+          if (!mcom.renewal_status) updates.renewal_status = updates.renewal_date_vise;
+        }
+
+        if (!mcom.next_renewal_date && lastPaid) {
+          updates.next_renewal_date = `${lastPaid}-12-31`;
+        }
+
+        if (!mcom.agm_date_vise || mcom.agm_date_vise.trim() === '' || mcom.agm_date_vise === '-') {
+          if (mcom.agm_date) {
+            const agmD = new Date(mcom.agm_date);
+            const oneYearAgo = new Date(todayZero);
+            oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+            if (!isNaN(agmD.getTime())) {
+              updates.agm_date_vise = agmD >= oneYearAgo ? 'Active' : 'Non Active';
+              if (!mcom.agm_status) updates.agm_status = updates.agm_date_vise;
+            }
+          }
+        }
+
+        if (Object.keys(updates).length > 0) {
+          await mcom.update(updates);
+          mcomSynced++;
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[RenewalStatusCheck] MCom Phase 0 sync error:', err?.message || err);
+  }
+
+  if (mcSynced > 0 || mcomSynced > 0) {
+    console.log(`[RenewalStatusCheck] Auto-synced missing statuses: ${mcSynced} MC(s), ${mcomSynced} M.Com(s)`);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // PHASE 1 — AUTO-RESTORE: Fix records that have a valid 2026+ payment or renewal period
+  //           but are incorrectly stored as Non Active.
   // ══════════════════════════════════════════════════════════════════════════
 
   // ── Restore MC records ───────────────────────────────────────────────────
@@ -292,7 +485,6 @@ async function runRenewalStatusCheck(models) {
           { status: 'Non Active' },
           { renewal_date_vise: 'Non Active' }
         ],
-        renewal_payment_status: 'Approved',
       },
       attributes: ['id', 'status', 'renewal_period', 'renewal_paid_year', 'renewal_paid_years', 'renewal_payment_status', 'reg_date', 'year'],
     });
@@ -322,7 +514,6 @@ async function runRenewalStatusCheck(models) {
             { active_non_active: 'Non Active' },
             { renewal_date_vise: 'Non Active' }
           ],
-          renewal_payment_status: 'Approved',
         },
         attributes: ['id', 'status', 'active_non_active', 'renewal_period', 'renewal_paid_year', 'renewal_paid_years', 'renewal_payment_status', 'renewal_status', 'reg_date', 'year'],
       });
@@ -489,37 +680,57 @@ async function startDailyRenewalStatusCheck(db) {
   scheduleNextMidnight();
 }
 
+// Global error-handling middleware
+app.use((err, req, res, next) => {
+  console.error('Unhandled server error:', err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  res.status(500).json({ error: 'Internal Server Error', message: err?.message || 'Server error' });
+});
+
 // ── Start Server ────────────────────────────────────────────────────────────
 // db.ready ensures the database is connected and models are synced
-// BEFORE we start listening for incoming HTTP requests.
+// BEFORE background maintenance jobs start.
 
-function tryListen(expressApp, port, host = '0.0.0.0') {
-  const server = expressApp.listen({ port, host }, () => {
-    console.log(`Backend API running on http://localhost:${port}`);
+function startApp() {
+  if (typeof PhusionPassenger !== 'undefined') {
+    PhusionPassenger.configure({ autoInstall: false });
+    return app.listen('passenger', () => {
+      console.log('🚀 Backend server running under Phusion Passenger');
+    });
+  }
+
+  const isNamedPipeOrSocket = typeof port === 'string' && !/^\d+$/.test(port);
+  const listenArgs = isNamedPipeOrSocket ? [port] : [port, '0.0.0.0'];
+
+  const server = app.listen(...listenArgs, () => {
+    console.log(`🚀 Backend server running on ${isNamedPipeOrSocket ? port : `http://0.0.0.0:${port}`}`);
   });
 
   server.on('error', (err) => {
     if (err && (err.code === 'EADDRINUSE' || err.code === 'EACCES')) {
-      console.error(`\n❌ ERROR: Port ${port} is already in use.`);
-      console.error(`Please kill the process using port ${port} or check if another instance of the backend is running.`);
+      console.error(`\n❌ ERROR: Port/Socket ${port} is already in use or inaccessible.`);
       process.exitCode = 1;
     } else {
-      console.error(`Failed to start server on port ${port}:`, err);
+      console.error(`Failed to start server on ${port}:`, err);
       process.exitCode = 1;
     }
   });
+
+  return server;
 }
+
+startApp();
 
 db.ready
   .then(() => {
-    // Start listening (with fallback if port is busy)
-    tryListen(app, port);
+    console.log('✅ Database models ready, starting background maintenance jobs...');
 
     // Start daily backups after server is ready
     startDailyCmaBackups({ intervalMs: 24 * 60 * 60 * 1000 }).catch((err) => {
       console.error('Failed to start daily SQL backups:', err?.message || err);
     });
-
 
     // Start daily renewal status auto-check (marks overdue MCs as Non Active)
     startDailyRenewalStatusCheck(db).catch((err) => {
@@ -527,8 +738,10 @@ db.ready
     });
   })
   .catch((err) => {
-    console.error('Failed to start server due to database error:', err.message);
-    process.exitCode = 1;
+    console.error('⚠️ Database initialization warning:', err?.message || err);
   });
+
+module.exports = app;
+
 
 

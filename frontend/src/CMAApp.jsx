@@ -231,7 +231,14 @@ function CMAApp() {
 
     pingAndUpdate();
     const interval = setInterval(pingAndUpdate, 60000);
-    return () => clearInterval(interval);
+    // Refresh permissions immediately when a role is saved in User Admin
+    window.addEventListener('cma:roles-updated', pingAndUpdate);
+    window.addEventListener('focus', pingAndUpdate);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('cma:roles-updated', pingAndUpdate);
+      window.removeEventListener('focus', pingAndUpdate);
+    };
   }, [currentUser?.id]);
 
   const handleLogout = () => {

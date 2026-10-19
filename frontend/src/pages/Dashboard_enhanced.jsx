@@ -577,8 +577,9 @@ function Dashboard({ onNavigate, currentUser }) {
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const [activityData, setActivityData] = useState([]);
+  const [activityItems, setActivityItems] = useState([]);
   const [activeUsers, setActiveUsers] = useState([]);
+
 
   const loadDashboardDataCb = useCallback(loadDashboardData, []);
   useAutoRefresh(loadDashboardDataCb, 30000);
@@ -668,7 +669,9 @@ function Dashboard({ onNavigate, currentUser }) {
           : configuredApiBase.startsWith('/api')
             ? configuredApiBase
             : '/api';
-        const actRes = await fetch(`${API_BASE}/daily-activities/user-timeline`);
+        // Show activity from ALL users (shared, server-side) — not only the current user
+        const params = new URLSearchParams({ limit: 10 });
+        const actRes = await fetch(`${API_BASE}/daily-activities/user-timeline?${params}`);
         if (actRes.ok) {
           const actJson = await actRes.json();
           if (actJson.items && Array.isArray(actJson.items)) {
@@ -676,7 +679,7 @@ function Dashboard({ onNavigate, currentUser }) {
               date: formatActivityTime(item.time),
               activity: item.text,
             }));
-            setActivityData(formatted);
+            setActivityItems(formatted);
           }
         }
       } catch (e) {
@@ -1009,14 +1012,14 @@ function Dashboard({ onNavigate, currentUser }) {
               <button className="btn btn-link" onClick={() => onNavigate?.('activitylogs')}>View All</button>
             </div>
             <div className="card-body">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {activityData.length === 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: 320, overflowY: 'auto' }}>
+                {activityItems.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text3)', fontSize: '13px' }}>
                     <i className="fas fa-info-circle" style={{ fontSize: '20px', marginBottom: '6px', display: 'block', opacity: 0.5 }} />
                     No recent activities recorded.
                   </div>
                 ) : (
-                  activityData.map((item, idx) => (
+                  activityItems.map((item, idx) => (
                     <div key={idx} style={{ paddingBottom: '10px', borderBottom: '1px solid #e0e0e0' }}>
                       <div style={{ fontSize: '12px', color: 'var(--text3)', marginBottom: '4px' }}>{item.date}</div>
                       <div style={{ fontSize: '13px', color: 'var(--text2)' }}>{item.activity}</div>

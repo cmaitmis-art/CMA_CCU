@@ -12,12 +12,14 @@ import * as XLSX from 'xlsx';
 import HistoryModal from '../components/HistoryModal.jsx';
 import { exportToPdfPrint } from '../utils/pdfExport';
 import html2pdf from 'html2pdf.js';
-import { MONTH_OPTIONS, getYearFilterOptions } from '../utils/filterConstants';
+import { MONTH_OPTIONS, getYearFilterOptions, ZONE_OPTIONS } from '../utils/filterConstants';
 import GenericExportModal from '../components/GenericExportModal.jsx';
 import { useSettings } from '../SettingsContext.jsx';
 import { hasPermission } from '../utils/roleLabel.js';
 import { CMA_LOGO_BASE64 } from '../utils/logoBase64.js';
-import { LETTERHEAD_BASE64 } from '../utils/letterheadBase64.js';
+import { LETTERHEAD_BASE64 } from '../utils/letterHeadBase64.js';
+import AgmManagementView from './AgmManagementView.jsx';
+import RichTextToolbar from '../components/RichTextToolbar.jsx';
 import {
   getAgmDueDate,
   daysUntil,
@@ -29,6 +31,8 @@ import {
   tdActionsStyle,
   getDetailedRenewalStatusText,
   formatDisplayDate,
+  formatDotDate,
+  getTodayDotDate,
   formatOrdinalDate,
   StatusPill,
   ActionBtn,
@@ -588,8 +592,36 @@ function toBackendRecordFromExcelRow(row) {
     audited_account: toText(getCell(row, 'audited_account', 'Audited Account', 'Audited_Account')) || null,
     building_insurance: toText(getCell(row, 'building_insurance', 'Building Insurance', 'Building Insuarance', 'building insuarance')) || null,
     active_non_active: toText(getCell(row, 'active_non_active', 'Active / Non Active', 'Active/Non Active', 'active non active', 'Active / Non Active')) || null,
-    renewal_date_vise: toText(getCell(row, 'renewal_date_vise', 'Renewal Date Vise', 'renewal date vise')) || null,
-    agm_date_vise: toText(getCell(row, 'agm_date_vise', 'AGM Date Vise', 'agm date vise')) || null,
+    renewal_date_vise: (() => {
+      const exp = toText(getCell(row, 'renewal_date_vise', 'Renewal Date Vise', 'renewal date vise', 'Renewal Date Wise', 'renewal_date_wise'));
+      if (exp) return (exp.toLowerCase().includes('non') || exp.toLowerCase().includes('inactive')) ? 'Non Active' : 'Active';
+      const rp = toText(getCell(row, 'renewal_period', 'Renewal Period'));
+      if (rp) {
+        const m = String(rp).match(/\b(19|20)\d{2}\b/g);
+        const y = m ? parseInt(m[m.length - 1], 10) : parseInt(rp, 10);
+        if (!isNaN(y)) return y >= new Date().getFullYear() ? 'Active' : 'Non Active';
+      }
+      return 'Active';
+    })(),
+    agm_date_vise: (() => {
+      const exp = toText(getCell(row, 'agm_date_vise', 'AGM Date Vise', 'agm date vise', 'AGM Date Wise', 'agm date wise'));
+      if (exp) return (exp.toLowerCase().includes('non') || exp.toLowerCase().includes('inactive')) ? 'Non Active' : 'Active';
+      const nextAgm = coerceDateText(getCell(row, 'next_agm_date', 'Next AGM Date', 'next_agm_date'));
+      if (nextAgm) {
+        const nd = new Date(nextAgm);
+        const td = new Date();
+        td.setHours(0, 0, 0, 0);
+        return (!Number.isNaN(nd.getTime()) && nd >= td) ? 'Active' : 'Non Active';
+      }
+      const agmD = coerceDateText(getCell(row, 'agm_date', 'AGM Date'));
+      if (agmD) {
+        const d = new Date(agmD);
+        const oneYearAgo = new Date();
+        oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+        return (!Number.isNaN(d.getTime()) && d >= oneYearAgo) ? 'Active' : 'Non Active';
+      }
+      return 'Active';
+    })(),
     renewal_status: toText(getCell(row, 'renewal_status', 'Renewal Status')) || null,
     agm_status: toText(getCell(row, 'agm_status', 'AGM Status')) || null,
 
@@ -641,6 +673,7 @@ export default function MComManagement({ currentUser }) {
   const [mcs, setMcs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isImporting, setIsImporting] = useState(false);
+  const [showAgmPage, setShowAgmPage] = useState(false);
 
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
@@ -671,6 +704,24 @@ export default function MComManagement({ currentUser }) {
   const [categoryFilter, setCategoryFilter] = useState(() => {
     return sessionStorage.getItem('cma_mcom_categoryFilter') || '';
   });
+  const [zoneFilter, setZoneFilter] = useState(() => {
+    return sessionStorage.getItem('cma_mcom_zoneFilter') || '';
+  });
+  const [isZoneOpen, setIsZoneOpen] = useState(false);
+  const [zoneSearch, setZoneSearch] = useState('');
+  const zoneDropdownRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (zoneDropdownRef.current && !zoneDropdownRef.current.contains(e.target)) {
+        setIsZoneOpen(false);
+      }
+    }
+    if (isZoneOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isZoneOpen]);
 
   const [page, setPage] = useState(1);
   const pageSizeDefault = 20;
@@ -683,6 +734,7 @@ export default function MComManagement({ currentUser }) {
   const pageSize = viewAll ? 999999 : pageSizeDefault;
   const [totalCount, setTotalCount] = useState(0);
   const [globalStats, setGlobalStats] = useState([]);
+  const [summaryStats, setSummaryStats] = useState(null);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [viewModalOpen, setViewModalOpen] = useState(false);
@@ -710,6 +762,11 @@ export default function MComManagement({ currentUser }) {
   const [printingAck, setPrintingAck] = useState(false);
   const [emailPreview, setEmailPreview] = useState(null);
   const [sendingEmail, setSendingEmail] = useState(false);
+  const [showAckToolbar, setShowAckToolbar] = useState(false);
+  const [ackSaved, setAckSaved] = useState(false);
+  const [ackDefaultOverrides, setAckDefaultOverrides] = useState(null);
+  const [ackCustomHtml, setAckCustomHtml] = useState(null);
+  const [ackRenderKey, setAckRenderKey] = useState(0);
   const [ackOverrides, setAckOverrides] = useState({
     refNo: '',
     date: getServerDate().toISOString().slice(0, 10),
@@ -721,20 +778,29 @@ export default function MComManagement({ currentUser }) {
     signName: 'Samantha Ampagala',
     signTitle1: 'Assistant General Manager (Customer Care) ',
     signTitle2: 'Condominium Management Authority',
-    toEmail: ''
+    toEmail: '',
+    customLetterHtml: null
   });
+  const ackOverridesRef = useRef(ackOverrides);
+  ackOverridesRef.current = ackOverrides;
+
   // - Renewal covering letter edit overrides -
+  const [showRlToolbar, setShowRlToolbar] = useState(false);
   const [rlOverrides, setRlOverrides] = useState({
     refNo: '',
-    date: getServerDate().toISOString().slice(0, 10),
-    signName: 'Arct.M.T. Kapila Priyantha',
-    signTitle1: 'General Manager',
+    date: getTodayDotDate(),
+    signName: 'Samantha Ampagala',
+    signTitle1: 'Assistant General Manager (Customer Care)',
     signTitle2: 'Condominium Management Authority',
+    customLetterHtml: null
   });
+  const rlOverridesRef = useRef(rlOverrides);
+  rlOverridesRef.current = rlOverrides;
   const [rlDefaultOverrides, setRlDefaultOverrides] = useState(null); // for undo
   const [rlLetterModalOpen, setRlLetterModalOpen] = useState(false);
   const [rlLetterRecord, setRlLetterRecord] = useState(null); // { mc, multiRows }
   const [rlSaved, setRlSaved] = useState(false);
+  const [letterRenderKey, setLetterRenderKey] = useState(0);
 
   // --- Renewal & AGM Reminders ---
   const [reminderMcs, setReminderMcs] = useState([]);
@@ -752,12 +818,13 @@ export default function MComManagement({ currentUser }) {
       sessionStorage.setItem('cma_mcom_yearFilter', yearFilter);
       sessionStorage.setItem('cma_mcom_monthFilter', monthFilter);
       sessionStorage.setItem('cma_mcom_categoryFilter', categoryFilter);
+      sessionStorage.setItem('cma_mcom_zoneFilter', zoneFilter);
       sessionStorage.setItem('cma_mcom_viewAll', String(viewAll));
       sessionStorage.setItem('cma_mcom_isZoomed', String(isZoomed));
       sessionStorage.setItem('cma_mcom_showRenewalPanel', String(showRenewalPanel));
       sessionStorage.setItem('cma_mcom_showAgmPanel', String(showAgmPanel));
     } catch (e) { }
-  }, [searchTerm, statusFilter, yearFilter, monthFilter, categoryFilter, viewAll, isZoomed, showRenewalPanel, showAgmPanel]);
+  }, [searchTerm, statusFilter, yearFilter, monthFilter, categoryFilter, zoneFilter, viewAll, isZoomed, showRenewalPanel, showAgmPanel]);
 
   const RENEWAL_WINDOW_DAYS = 30;
   const AGM_WINDOW_DAYS = 30;
@@ -818,14 +885,41 @@ export default function MComManagement({ currentUser }) {
     }
   }, [renewalReminders.length]);
 
+  function getEffectiveMcomStatus(r) {
+    if (!r) return 'Active';
+    const p = r.renewal_payment_status;
+    const a = (r.active_non_active || '').trim().toLowerCase();
+    const v = (r.renewal_date_vise || '').trim().toLowerCase();
+    const currentYear = new Date().getFullYear();
+    const yr = parseInt(r.renewal_period, 10);
+
+    if (p === 'Pending Approval' || r.status === 'Pending') return 'Pending';
+    if (a === 'non active' || a === 'nonactive' || a === 'inactive' || v === 'non active' || v === 'nonactive' || v === 'inactive' || r.status === 'Non Active') return 'Non Active';
+    if (a === 'active' || v === 'active' || r.status === 'Active' || p === 'Approved') return 'Active';
+    if (yr && yr < currentYear) return 'Non Active';
+    return 'Active';
+  }
+
   const stats = useMemo(() => {
+    if (summaryStats) {
+      return {
+        total: summaryStats.total ?? totalCount ?? 0,
+        active: summaryStats.active ?? 0,
+        inactive: summaryStats.non_active ?? 0,
+        pending: summaryStats.pending ?? 0,
+      };
+    }
     const dataSource = globalStats.length > 0 ? globalStats : mcs;
-    const active = dataSource.filter((r) => String(r.status).toLowerCase().trim() === 'active').length;
-    const inactive = dataSource.filter((r) => String(r.status).toLowerCase().trim() === 'non active').length;
-    const pending = dataSource.filter((r) => String(r.status).toLowerCase().trim() === 'pending').length;
-    const total = dataSource.length;
+    let active = 0, inactive = 0, pending = 0;
+    for (const r of dataSource) {
+      const s = getEffectiveMcomStatus(r);
+      if (s === 'Active') active++;
+      else if (s === 'Non Active') inactive++;
+      else if (s === 'Pending') pending++;
+    }
+    const total = totalCount || dataSource.length;
     return { total, active, inactive, pending };
-  }, [mcs, globalStats]);
+  }, [mcs, globalStats, summaryStats, totalCount]);
 
   const filtered = mcs || [];
 
@@ -839,6 +933,7 @@ export default function MComManagement({ currentUser }) {
         month: monthFilter || undefined,
         category: categoryFilter || undefined,
         status: statusFilter || undefined,
+        town: zoneFilter || undefined,
         q: searchTerm ? searchTerm.trim() : undefined,
         page: viewAll ? 1 : page,
         limit: pageSize,
@@ -849,9 +944,18 @@ export default function MComManagement({ currentUser }) {
       setMcs(rows);
       setTotalCount(data?.total ?? 0);
 
-      const allDataRes = await fetch(`${API_BASE}/mcom?limit=999999&page=1`);
-      const allData = await allDataRes.json();
-      setGlobalStats(allData?.rows || []);
+      try {
+        const sumRes = await fetch(`${API_BASE}/mcom/stats/summary`);
+        if (sumRes.ok) {
+          const sumData = await sumRes.json();
+          setSummaryStats(sumData);
+        }
+      } catch (e) {
+        // Fallback to allData if summary endpoint fails
+        const allDataRes = await fetch(`${API_BASE}/mcom?limit=999999&page=1`);
+        const allData = await allDataRes.json();
+        setGlobalStats(allData?.rows || []);
+      }
 
     } catch (err) {
       // stats fetch failed — silently ignore, cards will show last known values
@@ -862,12 +966,12 @@ export default function MComManagement({ currentUser }) {
 
   useEffect(() => {
     setPage(1);
-  }, [statusFilter, yearFilter, monthFilter, categoryFilter, searchTerm, viewAll]);
+  }, [statusFilter, yearFilter, monthFilter, categoryFilter, searchTerm, zoneFilter, viewAll]);
 
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, yearFilter, monthFilter, categoryFilter, searchTerm, page, viewAll]);
+  }, [statusFilter, yearFilter, monthFilter, categoryFilter, searchTerm, zoneFilter, page, viewAll]);
 
   function showToast(msg, type = 'success') {
     setToast({ msg, type });
@@ -875,7 +979,31 @@ export default function MComManagement({ currentUser }) {
   }
 
   function field(key) {
-    return (v) => setFormData((p) => ({ ...p, [key]: v }));
+    return (v) => setFormData((p) => {
+      const next = { ...p, [key]: v };
+      if (key === 'renewal_period') {
+        const rpMatches = String(v || '').match(/\b(19|20)\d{2}\b/g);
+        const rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(v, 10);
+        const currentYear = new Date().getFullYear();
+        if (!isNaN(rpYear)) {
+          const st = rpYear >= currentYear ? 'Active' : 'Non Active';
+          next.renewal_date_vise = st;
+          next.active_non_active = st;
+          next.renewal_status = st;
+          next.next_renewal_date = `${rpYear}-12-31`;
+        }
+      } else if (key === 'next_agm_date') {
+        if (v) {
+          const nextD = new Date(v);
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const st = (!Number.isNaN(nextD.getTime()) && nextD >= today) ? 'Active' : 'Non Active';
+          next.agm_date_vise = st;
+          next.agm_status = st;
+        }
+      }
+      return next;
+    });
   }
 
   function openAdd() {
@@ -961,6 +1089,188 @@ export default function MComManagement({ currentUser }) {
     } catch (e) {
       showToast(e.message || 'Delete failed', 'error');
     }
+  }
+
+  // Registration Receipt Modal State
+  const [regReceiptModalOpen, setRegReceiptModalOpen] = useState(false);
+  const [regReceiptRecord, setRegReceiptRecord] = useState(null);
+
+  function openRegistrationReceipt(mc) {
+    if (!mc) return;
+    const units = parseInt(mc?.units) || 0;
+    const isGov = String(mc?.mc_mcom || '').toUpperCase().includes('GOV') || String(mc?.category || '').toLowerCase().includes('gov');
+    const rate = isGov ? 500 : 250;
+    const regDate = new Date(mc?.reg_date || getServerDate());
+    const validDate = !Number.isNaN(regDate.getTime());
+    const yr = validDate ? regDate.getFullYear() : getServerDate().getFullYear();
+    const periodMonths = validDate ? Math.max(1, 12 - regDate.getMonth()) : 12;
+    const fee = parseFloat(((rate / 12) * units * periodMonths).toFixed(2));
+    const sscl = parseFloat((fee * 0.025).toFixed(2));
+    const vat = parseFloat(((fee + sscl) * 0.18).toFixed(2));
+    const total = parseFloat((fee + sscl + vat).toFixed(2));
+
+    setRegReceiptRecord({
+      mc,
+      fileNo: mc.new_file_no || mc.file_no || mc.old_file_no || '-',
+      mcName: mc.management_corporation_name || mc.name || '-',
+      planNo: mc.plan_no || '-',
+      address: mc.address || '-',
+      category: mc.category || mc.mc_mcom || (isGov ? 'Government' : 'Private (Normal)'),
+      periodStart: formatDisplayDate(mc.reg_date || `${yr}-01-01`),
+      periodEnd: formatDisplayDate(`${yr}-12-31`),
+      periodMonths,
+      units,
+      rate,
+      fee,
+      sscl,
+      vat,
+      total
+    });
+    setRegReceiptModalOpen(true);
+  }
+
+  function printStandaloneRegistrationReceipt(rec) {
+    if (!rec) return;
+    const fmt = (n) => (n != null ? Number(n).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-');
+    const escapeHtml = (unsafe) => String(unsafe).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+
+    const fileNo = escapeHtml(rec.fileNo);
+    const addr = [rec.mcName, rec.planNo !== '-' ? rec.planNo : '', rec.address !== '-' ? rec.address : ''].filter(Boolean).map(escapeHtml).join(' | ') || '-';
+    const periodStart = escapeHtml(rec.periodStart);
+    const periodEnd = escapeHtml(rec.periodEnd);
+    const category = escapeHtml(rec.category);
+    const units = rec.units;
+    const monthsCharged = rec.periodMonths;
+    const feeRate = fmt(rec.rate);
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title></title>
+  <style>
+    @page { size: A4; margin: 0 !important; }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #fff;
+      font-family: 'Times New Roman', serif;
+      color: #000;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .print-receipt {
+      width: 100%;
+      max-width: 210mm;
+      margin: 0;
+      padding: 15mm 0.8in 15mm 1.2in;
+      box-sizing: border-box;
+      font-size: 14px;
+      line-height: 1.5;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    .print-receipt .rc-head { text-align: center; margin-bottom: 18px; }
+    .print-receipt .rc-head .rc-logo img { width: 85px; height: auto; margin-bottom: 10px; }
+    .print-receipt .rc-head .rc-title { font-size: 18px; font-weight: 700; }
+    .print-receipt .rc-head .rc-sub { font-size: 14px; }
+    .print-receipt .rc-topline { text-align: right; font-size: 14px; margin-bottom: 8px; }
+    .print-receipt .rc-regno { font-weight: 700; }
+    .print-receipt .rc-row { margin: 10px 0; display: flex; align-items: center; gap: 8px; }
+    .print-receipt .rc-fill-label { white-space: nowrap; }
+    .print-receipt .rc-fill-line { flex: 1; border-bottom: 1px dotted #666; height: 1px; margin-top: 14px; }
+    .print-receipt .rc-checkline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 12px 0; padding: 10px 0; border-top: 1px solid #aaa; border-bottom: 1px solid #aaa; }
+    .print-receipt .rc-box { display: inline-block; width: 16px; height: 16px; border: 1px solid #111; text-align: center; line-height: 16px; font-size: 12px; margin-right: 8px; }
+    .print-receipt table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    .print-receipt td { padding: 8px 5px; border-bottom: 1px dotted #666; vertical-align: top; }
+    .print-receipt .rc-label { font-weight: 700; width: 48%; }
+    .print-receipt .rc-total td { border-top: 2px solid #111; font-weight: 700; font-size: 15px; }
+    .print-receipt .rc-sign { display: flex; justify-content: space-between; margin-top: 75px; page-break-inside: avoid; break-inside: avoid; }
+    .print-receipt .rc-sign div { border-top: 1px solid #111; padding-top: 5px; width: 45%; text-align: center; }
+
+    @media print {
+      @page { size: A4; margin: 0 !important; }
+      html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        height: 100% !important;
+        overflow: hidden !important;
+      }
+      .print-receipt {
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        page-break-after: avoid !important;
+        break-after: avoid !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-receipt">
+    <div class="rc-topline"><span class="rc-regno">No. ${fileNo}</span></div>
+    <div class="rc-head">
+      <div class="rc-logo"><img src="${CMA_LOGO_BASE64}" alt="CMA Logo" /></div>
+      <div class="rc-title">CONDOMINIUM MANAGEMENT AUTHORITY</div>
+      <div class="rc-sub">Customer Care Division / Legal Division</div>
+    </div>
+    <div class="rc-row"><span class="rc-fill-label">DGM Finance / Shroff</span><span class="rc-fill-line"></span></div>
+    <div class="rc-checkline">
+      <span>Registration of Management Committee</span><span class="rc-box">&#10003;</span>
+      <span>/ Renewal</span><span class="rc-box"></span>
+      <span>/ Application Fee</span><span class="rc-box"></span>
+      <span>/ Photocopy Charges</span><span class="rc-box"></span>
+      <span>/ Others</span><span class="rc-box"></span>
+    </div>
+    <table>
+      <tbody>
+        <tr><td class="rc-label">File No</td><td>${fileNo}</td></tr>
+        <tr><td class="rc-label">Name of the MC &amp; Address</td><td>${addr}</td></tr>
+        <tr><td class="rc-label">Period</td><td>${periodStart} to ${periodEnd}</td></tr>
+        <tr><td class="rc-label">Category</td><td>${category}</td></tr>
+        <tr><td class="rc-label">Number of Parcels (Units)</td><td>${units}</td></tr>
+        <tr><td class="rc-label">Period (months charged)</td><td>${monthsCharged}</td></tr>
+        <tr><td class="rc-label">Fee Rs. (Rate ${feeRate} / 12 - ${monthsCharged || '-'} months - ${units || '-'} units)</td><td>${fmt(rec.fee)}</td></tr>
+        <tr><td class="rc-label">Other Tax - SSCL (${SSCL_RATE * 100}%)</td><td>${fmt(rec.sscl)}</td></tr>
+        <tr><td class="rc-label">VAT (${VAT_RATE * 100}%)</td><td>${fmt(rec.vat)}</td></tr>
+        <tr class="rc-total"><td>Total Amount Rs.</td><td>${fmt(rec.total)}</td></tr>
+      </tbody>
+    </table>
+    <div class="rc-row" style="margin-top:14px">
+      <span>Please accept Rs. ____________________ (Cash / Cheque) Cheque No. ____________________</span>
+    </div>
+    <div class="rc-row">
+      <span>Cheque Date ____________________ Branch ____________________ from the above MC.</span>
+    </div>
+    <div class="rc-sign">
+      <div>Authorized Signature</div>
+      <div>Date</div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '200vw';
+    iframe.style.bottom = '0';
+    iframe.style.width = '210mm';
+    iframe.style.height = '297mm';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow.document;
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    iframe.contentWindow.focus();
+    setTimeout(() => {
+      iframe.contentWindow.print();
+      setTimeout(() => {
+        document.body.removeChild(iframe);
+      }, 1000);
+    }, 500);
   }
 
   function openRenewal(mc) {
@@ -1093,7 +1403,7 @@ export default function MComManagement({ currentUser }) {
       const endPaidYear = mc.renewal_paid_year || (yearsList.length > 0 ? Math.max(...yearsList) : getServerDate().getFullYear());
 
       // Open Acknowledgement Modal
-      setAckOverrides({
+      const cleanAckDefaults = {
         refNo: mc.new_file_no || mc.file_no || ackNo,
         date: getServerDate().toISOString().slice(0, 10),
         year: String(endPaidYear),
@@ -1104,10 +1414,23 @@ export default function MComManagement({ currentUser }) {
         signName: 'Samantha Ampagala',
         signTitle1: 'Assistant General Manager (Customer Care) ',
         signTitle2: 'Condominium Management Authority',
-        toEmail: mc.email_address || mc.secretary_email || ''
-      });
-      const updatedMc = { ...mc, ...payload };
+        toEmail: mc.email_address || mc.secretary_email || '',
+        customLetterHtml: null
+      };
+
+      const savedAck = loadMComAckOverrides(mc);
+      const activeAck = savedAck ? { ...cleanAckDefaults, ...savedAck } : { ...cleanAckDefaults };
+
+      setAckDefaultOverrides(cleanAckDefaults);
+      setAckOverrides(activeAck);
+      ackOverridesRef.current = activeAck;
+      setAckCustomHtml(savedAck?.customLetterHtml || null);
+      setAckSaved(!!savedAck);
+      setAckRenderKey(prev => prev + 1);
+
+      const updatedMc = { ...mc, ...payload, acknowledgement_no: ackNo };
       setViewRecord(updatedMc);
+      setShowAckToolbar(false);
       setAckModalOpen(true);
     } catch (e) {
       showToast(e.message || 'Failed to approve', 'error');
@@ -1176,6 +1499,68 @@ export default function MComManagement({ currentUser }) {
       .replace(/'/g, "&#039;");
   };
 
+  function getMComAckStorageKey(mc) {
+    if (!mc) return null;
+    const key = mc.new_file_no || mc.file_no || mc.id || mc.acknowledgement_no || 'unknown';
+    return `mcom_ack_overrides_${key}`;
+  }
+
+  function loadMComAckOverrides(mc) {
+    try {
+      const k = getMComAckStorageKey(mc);
+      if (!k) return null;
+      const raw = localStorage.getItem(k);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.signName === 'Samantha Ampaala') {
+        parsed.signName = 'Samantha Ampagala';
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveMComAckOverrides(mc, data) {
+    try {
+      const k = getMComAckStorageKey(mc);
+      if (!k) return;
+      localStorage.setItem(k, JSON.stringify(data));
+    } catch (e) {
+      console.warn('Failed to save MCom ack overrides', e);
+    }
+  }
+
+  const handleSaveAck = () => {
+    if (!viewRecord) return;
+    const rendered = document.getElementById('ack-letter-content-render');
+    const customHtml = rendered ? rendered.innerHTML : null;
+    const toSave = {
+      ...ackOverridesRef.current,
+      customLetterHtml: customHtml
+    };
+    ackOverridesRef.current = toSave;
+    setAckOverrides(toSave);
+    setAckCustomHtml(customHtml);
+    saveMComAckOverrides(viewRecord, toSave);
+    setAckSaved(true);
+    showToast('Acknowledgement letter saved successfully! ✅', 'success');
+  };
+
+  const handleUndoAck = () => {
+    if (!viewRecord) return;
+    const resetDefaults = { ...(ackDefaultOverrides || {}), customLetterHtml: null };
+    ackOverridesRef.current = resetDefaults;
+    setAckOverrides(resetDefaults);
+    setAckCustomHtml(null);
+    try {
+      localStorage.removeItem(getMComAckStorageKey(viewRecord));
+    } catch {}
+    setAckSaved(false);
+    setAckRenderKey(prev => prev + 1);
+    showToast('Reset letter back to original defaults! ↺', 'info');
+  };
+
   function renderAcknowledgementLetter(mc) {
     if (!mc) return null;
     const addressLines = String(mc.address || '')
@@ -1186,14 +1571,28 @@ export default function MComManagement({ currentUser }) {
     const ackYearTo = ackOverrides.yearTo || ackOverrides.year;
     const isMultiYearAck = ackYearFrom && ackYearTo && String(ackYearFrom) !== String(ackYearTo);
 
+    if (ackCustomHtml) {
+      return (
+        <div
+          className="official-letter"
+          id="ack-letter-content-render"
+          contentEditable
+          suppressContentEditableWarning
+          style={{ fontFamily: 'Times New Roman, serif', fontSize: 16, lineHeight: 1.6, padding: '24px 28px', outline: 'none' }}
+          dangerouslySetInnerHTML={{ __html: ackCustomHtml }}
+          onInput={() => setAckSaved(false)}
+        />
+      );
+    }
+
     return (
-      <div className="official-letter" id="ack-letter-content-render">
+      <div className="official-letter" id="ack-letter-content-render" style={{ fontFamily: 'Times New Roman, serif', fontSize: 16, lineHeight: 1.6, padding: '24px 28px' }} onInput={() => setAckSaved(false)}>
         <div className="ol-ref" style={{ overflow: 'hidden', marginBottom: '25px' }}>
-          <span contentEditable suppressContentEditableWarning style={{ float: 'left' }}>{ackOverrides.refNo}</span>
-          <span contentEditable suppressContentEditableWarning style={{ float: 'right' }}>{formatDotDate(ackOverrides.date)}</span>
+          <span contentEditable suppressContentEditableWarning style={{ float: 'left', outline: 'none' }}>{ackOverrides.refNo}</span>
+          <span contentEditable suppressContentEditableWarning style={{ float: 'right', outline: 'none' }}>{formatDotDate(ackOverrides.date)}</span>
         </div>
 
-        <div className="ol-addr" contentEditable suppressContentEditableWarning>
+        <div className="ol-addr" contentEditable suppressContentEditableWarning style={{ outline: 'none' }}>
           <div>The Secretary,</div>
           <div>The Management Committee</div>
           {(() => {
@@ -1212,9 +1611,9 @@ export default function MComManagement({ currentUser }) {
           {addressLines.map((line, i) => <div key={i}>{line},</div>)}
         </div>
 
-        <p className="ol-para" contentEditable suppressContentEditableWarning>Dear Sir/Madam,</p>
+        <p className="ol-para" contentEditable suppressContentEditableWarning style={{ outline: 'none' }}>Dear Sir/Madam,</p>
 
-        <div className="ol-title" contentEditable suppressContentEditableWarning style={{ fontWeight: 'bold', textDecoration: 'underline' }}>
+        <div className="ol-title" contentEditable suppressContentEditableWarning style={{ fontWeight: 'bold', textDecoration: 'underline', outline: 'none' }}>
           RENEWAL OF REGISTRATION OF THE MANAGEMENT COMMITTEE<br />
           {isMultiYearAck
             ? `(01 January ${ackYearFrom} – 31 December ${ackYearTo})`
@@ -1222,18 +1621,18 @@ export default function MComManagement({ currentUser }) {
           }
         </div>
 
-        <p className="ol-para" contentEditable suppressContentEditableWarning>
+        <p className="ol-para" contentEditable suppressContentEditableWarning style={{ outline: 'none' }}>
           We acknowledge with thanks the receipt of the Management Committee Registration Renewal Fee amounting to Rs. {ackOverrides.amount}, which was received on <span style={{ whiteSpace: 'nowrap' }}>{formatOrdinalDate(ackOverrides.paidDate)}</span>.
         </p>
 
-        <p className="ol-para" contentEditable suppressContentEditableWarning>
+        <p className="ol-para" contentEditable suppressContentEditableWarning style={{ outline: 'none' }}>
           Accordingly, the registration of the Management Committee has been renewed and is valid until <span style={{ whiteSpace: 'nowrap' }}>31<sup>st</sup> December {ackYearTo}</span>. Please note that the registration shall be renewed annually.
         </p>
 
-        <p className="ol-para" contentEditable suppressContentEditableWarning>Thank you.</p>
-        <p className="ol-para" contentEditable suppressContentEditableWarning>Yours faithfully,</p>
+        <p className="ol-para" contentEditable suppressContentEditableWarning style={{ outline: 'none' }}>Thank you.</p>
+        <p className="ol-para" contentEditable suppressContentEditableWarning style={{ outline: 'none' }}>Yours faithfully,</p>
 
-        <div className="ol-sign" contentEditable suppressContentEditableWarning>
+        <div className="ol-sign" contentEditable suppressContentEditableWarning style={{ outline: 'none' }}>
           <div>{ackOverrides.signName}</div>
           <div><strong>{ackOverrides.signTitle1}</strong></div>
           <div><strong>{ackOverrides.signTitle2}</strong></div>
@@ -1247,17 +1646,28 @@ export default function MComManagement({ currentUser }) {
     const renderedContent = document.getElementById('ack-letter-content-render');
     let html = '';
     if (renderedContent) {
+      const customHtml = renderedContent.innerHTML;
+      const toSave = {
+        ...ackOverridesRef.current,
+        customLetterHtml: customHtml
+      };
+      ackOverridesRef.current = toSave;
+      setAckOverrides(toSave);
+      setAckCustomHtml(customHtml);
+      saveMComAckOverrides(viewRecord, toSave);
+      setAckSaved(true);
+
       html = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8" />
 <title>Acknowledgement Letter - ${escapeHtml(viewRecord.acknowledgement_no || '')}</title>
 <style>
-  @page { size: A4; margin: 0; }
+  @page { size: A4; margin: 0 !important; }
   * { box-sizing: border-box; }
   body { margin: 0; padding: 0; font-family: 'Times New Roman', serif; color: #111; background: #fff; }
-  .doc-page { padding: 15mm; min-height: 100vh; }
-  .official-letter { max-width: 680px; margin: 0 auto; padding-top: 2.2in; font-family: 'Times New Roman', serif; font-size: 16px; line-height: 1.6; }
+  .doc-page { padding: 0; margin: 0; min-height: 100vh; }
+  .official-letter { width: 100%; max-width: 210mm; margin: 0; padding: 2.7in 0.8in 0.5in 1.2in; box-sizing: border-box; font-family: 'Times New Roman', serif; font-size: 16px; line-height: 1.6; }
   .ol-ref { display: flex; justify-content: space-between; margin-bottom: 25px; }
   .ol-addr { margin-bottom: 25px; }
   .ol-addr div { margin: 3px 0; }
@@ -1271,7 +1681,7 @@ export default function MComManagement({ currentUser }) {
 <body>
   <div class="doc-page">
     <div class="official-letter">
-      ${renderedContent.innerHTML}
+      ${customHtml}
     </div>
   </div>
   <script>
@@ -1575,25 +1985,68 @@ export default function MComManagement({ currentUser }) {
       });
     }
 
-    const finalOverrides = {
-      refNo: fileNo,
-      date: getServerDate().toISOString().slice(0, 10),
-      signName: 'Arct.M.T. Kapila Priyantha',
-      signTitle1: 'General Manager',
-      signTitle2: 'Condominium Management Authority',
-      bodyParagraph1: defaultBodyParagraph1,
-      bodyParagraph2: defaultBodyParagraph2,
-      tableRows: initialTableRows,
-      ...saved
-    };
-    if (!finalOverrides.bodyParagraph1) finalOverrides.bodyParagraph1 = defaultBodyParagraph1;
-    if (!finalOverrides.bodyParagraph2) finalOverrides.bodyParagraph2 = defaultBodyParagraph2;
-    if (!finalOverrides.tableRows || !finalOverrides.tableRows.length) finalOverrides.tableRows = initialTableRows;
+    const defaultPeriodLabel = firstYear === lastYear
+      ? `(01/01/${lastYear} - 31/12/${lastYear})`
+      : `(01/01/${firstYear} - 31/12/${lastYear})`;
 
-    setRlOverrides(finalOverrides);
-    setRlDefaultOverrides(finalOverrides);
+    const addressLines = String(mc.address || '').split(/\r?\n|,/).map(l => l.trim()).filter(Boolean);
+    const defaultRecipientHtml = `<div>The Secretary,</div>` +
+      `<div>${escapeHtml(mc.management_corporation_name || '-')}</div>` +
+      addressLines.map(l => `<div>${escapeHtml(l)}</div>`).join('');
+    const defaultTitleHtml = `RENEWAL REGISTRATION OF THE MANAGEMENT COMMITTEE FOR YEAR<br/>${defaultPeriodLabel}`;
+
+    const preDisplayRows = initialTableRows.filter(r => r.isPre);
+    const postDisplayRows = initialTableRows.filter(r => !r.isPre);
+
+    const defaultPrePeriodHeading = preDisplayRows.length > 0
+      ? `Period ${preDisplayRows[0].yearLabel}${preDisplayRows.length > 1 ? ` - ${preDisplayRows[preDisplayRows.length - 1].yearLabel}` : ''}`
+      : '';
+    const defaultPostPeriodHeading = postDisplayRows.length > 0
+      ? `Period ${postDisplayRows[0].yearLabel}${postDisplayRows.length > 1 ? ` - ${postDisplayRows[postDisplayRows.length - 1].yearLabel}` : ''}`
+      : '';
+    const defaultTransitionalText = 'We wish to inform you that charges have been revised and are applicable per unit basis from 01.03.2023 as follows.';
+    const defaultPaymentNote = 'Payment with regard to the above can be paid by cash or cheque in favor of &quot;<strong>Condominium Management Authority</strong>&quot;';
+
+    const todayDot = getTodayDotDate();
+    const cleanDefaults = {
+      refNo: fileNo,
+      date: todayDot,
+      recipientHtml: defaultRecipientHtml,
+      titleHtml: defaultTitleHtml,
+      bodyParagraph1: defaultBodyParagraph1,
+      prePeriodHeading: defaultPrePeriodHeading,
+      tableRows: initialTableRows,
+      transitionalText: defaultTransitionalText,
+      postPeriodHeading: defaultPostPeriodHeading,
+      bodyParagraph2: defaultBodyParagraph2,
+      paymentNote: defaultPaymentNote,
+      closingNote1: 'Thank You.',
+      closingNote2: 'Yours Faithfully,',
+      periodLabel: defaultPeriodLabel,
+      signName: 'Samantha Ampagala',
+      signTitle1: 'Assistant General Manager (Customer Care)',
+      signTitle2: 'Condominium Management Authority',
+      customLetterHtml: null
+    };
+
+    const activeOverrides = saved ? { ...cleanDefaults, ...saved } : { ...cleanDefaults };
+    if (!saved?.isManualDate || !saved?.date) {
+      activeOverrides.date = todayDot;
+    }
+    if (saved?.tableRows && saved.tableRows.length > 0) {
+      activeOverrides.tableRows = saved.tableRows;
+    } else {
+      activeOverrides.tableRows = initialTableRows;
+    }
+    activeOverrides.customLetterHtml = saved?.customLetterHtml || null;
+
+    rlOverridesRef.current = activeOverrides;
+    setRlDefaultOverrides(cleanDefaults);
+    setRlOverrides(activeOverrides);
     setRlLetterRecord({ mc, multiRows });
-    setRlSaved(false);
+    setRlSaved(!!saved);
+    setShowRlToolbar(false);
+    setLetterRenderKey(prev => prev + 1);
     setRlLetterModalOpen(true);
   }
 
@@ -1629,7 +2082,11 @@ export default function MComManagement({ currentUser }) {
     const firstYear = Array.isArray(multiRows) && multiRows.length > 0 ? multiRows[0].year : getServerDate().getFullYear();
     const lastYear = Array.isArray(multiRows) && multiRows.length > 0 ? multiRows[multiRows.length - 1].year : getServerDate().getFullYear();
     const prevYear = firstYear - 1;
-    const periodLabel = firstYear === lastYear ? String(firstYear) : `(${firstYear} - ${lastYear})`;
+    const defaultPeriodLabel = firstYear === lastYear
+      ? `(01/01/${lastYear} - 31/12/${lastYear})`
+      : `(01/01/${firstYear} - 31/12/${lastYear})`;
+    const periodLabel = overrides?.periodLabel || defaultPeriodLabel;
+    const titleHtml = overrides?.titleHtml || `RENEWAL REGISTRATION OF THE MANAGEMENT COMMITTEE FOR YEAR<br/>${periodLabel}`;
 
     const groupRows = (rows) => {
       const groups = [];
@@ -1660,10 +2117,10 @@ export default function MComManagement({ currentUser }) {
         vat: g.vat,
         total: g.total
       }));
-      const prePeriodLabel = displayRows.length > 1 ? `${displayRows[0].yearLabel} - ${displayRows[displayRows.length - 1].yearLabel}` : displayRows[0].yearLabel;
+      const prePeriodLabel = overrides?.prePeriodHeading || (displayRows.length > 1 ? `Period ${displayRows[0].yearLabel} - ${displayRows[displayRows.length - 1].yearLabel}` : `Period ${displayRows[0].yearLabel}`);
 
       preTable = `
-        <p class="ol-section">Period ${prePeriodLabel}</p>
+        <p class="ol-section">${escapeHtml(prePeriodLabel)}</p>
         <table class="ol-table">
           <thead>
             <tr>
@@ -1701,7 +2158,7 @@ export default function MComManagement({ currentUser }) {
     }
 
     const transitionNote = (hasPre && hasPost)
-      ? `<p class="ol-para">We wish to inform you that charges have been revised and are applicable per unit basis from 01.03.2023 as follows.</p>`
+      ? `<p class="ol-para">${overrides?.transitionalText || 'We wish to inform you that charges have been revised and are applicable per unit basis from 01.03.2023 as follows.'}</p>`
       : '';
 
     let postTable = '';
@@ -1722,9 +2179,10 @@ export default function MComManagement({ currentUser }) {
 
       const firstPostYear = rows[0]?.yearLabel || '';
       const lastPostYear = rows[rows.length - 1]?.yearLabel || '';
+      const postPeriodLabel = overrides?.postPeriodHeading || (`Period ${firstPostYear}${rows.length > 1 ? ` - ${lastPostYear}` : ''}`);
 
       postTable = `
-        <p class="ol-section">Period ${firstPostYear}${rows.length > 1 ? ` - ${lastPostYear}` : ''}</p>
+        <p class="ol-section">${escapeHtml(postPeriodLabel)}</p>
         <table class="ol-table">
           <thead>
             <tr>
@@ -1762,34 +2220,45 @@ export default function MComManagement({ currentUser }) {
 
     const rl = overrides || {};
     const refDisplay = rl.refNo || fileNo;
-    const dateDisplay = rl.date ? formatDotDate(rl.date) : formatDotDate(today);
-    const signName = rl.signName || 'Arct.M.T. Kapila Priyantha';
-    const signTitle1 = rl.signTitle1 || 'General Manager';
+    const dateDisplay = rl.date ? formatDotDate(rl.date) : getTodayDotDate();
+    const rawSignName = rl.signName || 'Samantha Ampagala';
+    const signName = (rawSignName === 'Arct.M.T. Kapila Priyantha' || rawSignName === 'Samantha Ampaala') ? 'Samantha Ampagala' : rawSignName;
+    const signTitle1 = (!rl.signTitle1 || rl.signTitle1 === 'General Manager') ? 'Assistant General Manager (Customer Care)' : rl.signTitle1;
     const signTitle2 = rl.signTitle2 || 'Condominium Management Authority';
     const bodyParagraph1 = rl.bodyParagraph1 || `The Registration of your Management Committee has been expired on 31.12.${prevYear}. Therefore, please make arrangements to renew the registration of your Management Committee up to 31.12.${lastYear}.`;
     const bodyParagraph2 = rl.bodyParagraph2 || `Every management committee is required to pay the registration fees for the year before 31<sup>st</sup> March ${lastYear}. But since you have failed to pay the said fees so far, I hereby request you to take necessary steps to pay some of <strong>Rs. ${fmt(grandTotal)}</strong> as soon as possible with duly prepared application form (annex-01).`;
 
-    const letterHtml = `
-      <div class="official-letter">
-        <div class="ol-ref"><span contenteditable="true">${escapeHtml(refDisplay)}</span><span contenteditable="true">${dateDisplay}</span></div>
-        <div class="ol-addr" contenteditable="true">
+    const recipientHtml = rl.recipientHtml || `
           <div>The Secretary,</div>
           <div>${escapeHtml(mc.management_corporation_name || '-')}</div>
-          ${addressLines.map(l => `<div>${escapeHtml(l)}</div>`).join('')}
-        </div>
-        <div class="ol-title" contenteditable="true">RENEWAL REGISTRATION OF THE MANAGEMENT COMMITTEE FOR YEAR<br/>${periodLabel}</div>
-        <p class="ol-para" contenteditable="true">${bodyParagraph1}</p>
+          ${addressLines.map(l => `<div>${escapeHtml(l)}</div>`).join('')}`;
+    const titleFinalHtml = rl.titleHtml || titleHtml;
+    const transFinalHtml = (hasPre && hasPost) ? `<p class="ol-para">${rl.transitionalText || 'We wish to inform you that charges have been revised and are applicable per unit basis from 01.03.2023 as follows.'}</p>` : '';
+    const paymentFinalHtml = rl.paymentNote || 'Payment with regard to the above can be paid by cash or cheque in favor of &quot;<strong>Condominium Management Authority</strong>&quot;';
+    const closing1 = rl.closingNote1 || 'Thank You.';
+    const closing2 = rl.closingNote2 || 'Yours Faithfully,';
+
+    const letterHtml = overrides?.customLetterHtml ? `
+      <div class="official-letter">
+        ${overrides.customLetterHtml}
+      </div>
+    ` : `
+      <div class="official-letter">
+        <div class="ol-ref"><span>${escapeHtml(refDisplay)}</span><span>${dateDisplay}</span></div>
+        <div class="ol-addr">${recipientHtml}</div>
+        <div class="ol-title">${titleFinalHtml}</div>
+        <p class="ol-para">${bodyParagraph1}</p>
         
         ${preTable}
-        ${transitionNote}
+        ${transFinalHtml}
         ${postTable}
 
-        <p class="ol-para" contenteditable="true">${bodyParagraph2}</p>
-        <p class="ol-para" contenteditable="true">Payment with regard to the above can be paid by cash or cheque in favor of &quot;<strong>Condominium Management Authority</strong>&quot;</p>
+        <p class="ol-para">${bodyParagraph2}</p>
+        <p class="ol-para">${paymentFinalHtml}</p>
         <div class="ol-footer" style="page-break-inside: avoid;">
-          <p class="ol-para" contenteditable="true">Thank You.</p>
-          <p class="ol-para" contenteditable="true">Yours Faithfully,</p>
-          <div class="ol-sign" contenteditable="true">
+          <p class="ol-para">${closing1}</p>
+          <p class="ol-para">${closing2}</p>
+          <div class="ol-sign">
             <div class="ol-sign-space"></div>
             <div><strong>${escapeHtml(signName)}</strong></div>
             <div><strong>${escapeHtml(signTitle1)}</strong></div>
@@ -1878,7 +2347,7 @@ export default function MComManagement({ currentUser }) {
   [contenteditable]:hover:not(:focus) { background: rgba(79,110,247,0.06); border-radius: 2px; }
 
   @media print {
-    @page { margin: 0; }
+    @page { size: A4; margin: 0 !important; }
     .edit-toolbar { display: none !important; }
     body { margin: 0; padding: 0; }
     [contenteditable] { outline: none !important; background: transparent !important; }
@@ -1886,32 +2355,96 @@ export default function MComManagement({ currentUser }) {
       page-break-after: always; 
       break-after: page; 
       display: block; 
-      padding-bottom: 5mm !important;
-      margin-bottom: 0 !important;
+      padding-bottom: 0 !important;
+      margin: 0 !important;
     }
     .doc-page.letter-page {
-      padding-top: 2.2in !important;
+      margin: 0 !important;
+      margin-top: 0 !important;
+      padding-top: 2.7in !important;
+      padding-left: 1.2in !important;
+      padding-right: 0.8in !important;
+      padding-bottom: 0 !important;
+      box-sizing: border-box !important;
     }
-    .official-letter { font-size: 16px; line-height: 1.25; padding: 0 5px; }
-    .official-letter .ol-ref, .official-letter .ol-addr { margin-bottom: 2px; }
-    .official-letter .ol-addr div { margin: 0; }
-    .official-letter .ol-title { margin: 2px 0; font-size: 16px; }
-    .official-letter .ol-para { margin: 4px 0; }
-    .official-letter table.ol-table { font-size: 14px; margin: 4px 0; }
-    .official-letter table.ol-table th, .official-letter table.ol-table td { padding: 2px 4px; }
-    .official-letter .ol-sign { margin-top: 4px; }
-    .official-letter .ol-sign-space { height: 10px; }
+    .doc-page.doc-page-receipt {
+      margin-top: 0 !important;
+      padding-top: 15mm !important;
+      padding-left: 1.2in !important;
+      padding-right: 0.8in !important;
+      box-sizing: border-box !important;
+    }
+    .doc-page:last-child {
+      page-break-after: auto;
+      break-after: auto;
+    }
+    .official-letter { 
+      font-size: 15px; 
+      line-height: 1.38; 
+      padding: 0 !important;
+      margin: 0 !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      color: #000;
+    }
+    .official-letter .ol-ref { 
+      display: flex; 
+      justify-content: space-between; 
+      font-weight: normal !important; 
+      margin-bottom: 14px; 
+    }
+    .official-letter .ol-addr { margin-bottom: 14px; }
+    .official-letter .ol-addr div { margin: 1.5px 0; }
+    .official-letter .ol-title { margin: 12px 0 10px; font-size: 15px; font-weight: 700; text-decoration: underline; text-align: left; }
+    .official-letter .ol-para { margin: 8px 0; font-size: 15px; line-height: 1.38; text-align: justify; }
+    .official-letter .ol-yearline { font-weight: 700; margin: 6px 0 3px; font-size: 14px; }
+    .official-letter table.ol-table { font-size: 12.5px; margin: 4px 0 10px; width: 100%; border-collapse: collapse; }
+    .official-letter table.ol-table th, .official-letter table.ol-table td { padding: 4.5px 6px; border: 1px solid #000; text-align: center; vertical-align: middle; }
+    .official-letter table.ol-table th { font-weight: 700; background: #fff; }
+    .official-letter table.ol-table td:first-child { text-align: left; font-weight: 600; }
+    .official-letter table.ol-table .ol-total-row td { font-weight: 700; background: #f9f9f9; }
+    .official-letter table.ol-table .ol-total-row td:first-child { text-align: center; }
+    .official-letter .ol-sign { margin-top: 15px; font-size: 15px; page-break-inside: avoid; }
+    .official-letter .ol-sign div { margin: 1px 0; }
+    .official-letter .ol-sign-space { height: 35px; }
+
+    /* Graceful compact fallback if needed */
+    .official-letter.compact-letter {
+      font-size: 14px !important;
+      line-height: 1.28 !important;
+    }
+    .official-letter.compact-letter .ol-ref { margin-bottom: 8px !important; }
+    .official-letter.compact-letter .ol-addr { margin-bottom: 8px !important; }
+    .official-letter.compact-letter .ol-addr div { margin: 1px 0 !important; }
+    .official-letter.compact-letter .ol-title { margin: 8px 0 !important; font-size: 14px !important; }
+    .official-letter.compact-letter .ol-yearline { margin: 4px 0 2px !important; font-size: 13px !important; }
+    .official-letter.compact-letter .ol-para { margin: 5px 0 !important; font-size: 14px !important; line-height: 1.28 !important; }
+    .official-letter.compact-letter table.ol-table { font-size: 11.5px !important; margin: 2px 0 6px !important; }
+    .official-letter.compact-letter table.ol-table th,
+    .official-letter.compact-letter table.ol-table td { padding: 2.5px 4px !important; }
+    .official-letter.compact-letter .ol-sign { margin-top: 10px !important; font-size: 14px !important; }
+    .official-letter.compact-letter .ol-sign-space { height: 20px !important; }
   }
 
   .doc-page { 
     padding: 15mm; 
-    position: relative;
+    position: relative; 
     page-break-after: always; 
     break-after: page; 
   }
   .doc-page.letter-page {
-    padding-top: 2.2in;
-    margin-top: 52px;
+    padding-top: 2.7in;
+    padding-left: 1.2in;
+    padding-right: 0.8in;
+    margin: 0 auto;
+    box-sizing: border-box;
+  }
+  .doc-page.doc-page-receipt {
+    padding-top: 15mm;
+    padding-left: 1.2in;
+    padding-right: 0.8in;
+    margin-top: 0;
+    box-sizing: border-box;
   }
   .doc-page:last-child {
     page-break-after: auto;
@@ -1920,22 +2453,37 @@ export default function MComManagement({ currentUser }) {
   }
 
   /* - Covering Letter - */
-  .official-letter { max-width: 700px; margin: 0 auto; padding: 10px; font-family: 'Times New Roman', serif; font-size: 16px; line-height: 1.4; color: #111; }
-  .official-letter .ol-ref { display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 12px; }
-  .official-letter .ol-addr { margin-bottom: 12px; }
-  .official-letter .ol-addr div { margin: 2px 0; }
-  .official-letter .ol-title { text-align: left; font-weight: 700; text-decoration: underline; margin: 12px 0; }
-  .official-letter .ol-yearline { font-weight: 700; margin: 6px 0; }
+  .official-letter { max-width: 100%; margin: 0 auto; padding: 0; font-family: 'Times New Roman', serif; font-size: 15px; line-height: 1.38; color: #111; }
+  .official-letter .ol-ref { display: flex; justify-content: space-between; font-weight: normal; margin-bottom: 14px; }
+  .official-letter .ol-addr { margin-bottom: 14px; }
+  .official-letter .ol-addr div { margin: 1.5px 0; }
+  .official-letter .ol-title { text-align: left; font-weight: 700; text-decoration: underline; margin: 12px 0 10px; }
+  .official-letter .ol-yearline { font-weight: 700; margin: 6px 0 3px; font-size: 14px; }
   .official-letter .ol-section { font-weight: 700; margin: 10px 0 2px; font-size: 13px; text-indent: 0; }
   .official-letter .ol-para { margin: 8px 0; text-align: justify; }
-  .official-letter table.ol-table { width: 100%; border-collapse: collapse; margin: 2px 0 10px; font-size: 13px; }
-  .official-letter table.ol-table th, .official-letter table.ol-table td { border: 1px solid #000; padding: 4px 6px; text-align: center; vertical-align: middle; }
+  .official-letter table.ol-table { width: 100%; border-collapse: collapse; margin: 4px 0 10px; font-size: 12.5px; }
+  .official-letter table.ol-table th, .official-letter table.ol-table td { border: 1px solid #000; padding: 4.5px 6px; text-align: center; vertical-align: middle; }
   .official-letter table.ol-table th { font-weight: 700; background: #fff; }
   .official-letter table.ol-table td:first-child { text-align: left; font-weight: 600; }
   .official-letter table.ol-table .ol-total-row td { font-weight: 700; background: #f9f9f9; }
   .official-letter table.ol-table .ol-total-row td:first-child { text-align: center; }
   .official-letter .ol-sign { margin-top: 15px; page-break-inside: avoid; }
+  .official-letter .ol-sign div { margin: 1px 0; }
   .official-letter .ol-sign-space { height: 35px; }
+
+  /* Compact mode fallback */
+  .official-letter.compact-letter { font-size: 14px; line-height: 1.28; }
+  .official-letter.compact-letter .ol-ref { margin-bottom: 8px; font-weight: normal; }
+  .official-letter.compact-letter .ol-addr { margin-bottom: 8px; }
+  .official-letter.compact-letter .ol-addr div { margin: 1px 0; line-height: 1.28; }
+  .official-letter.compact-letter .ol-title { margin: 8px 0; font-size: 14px; line-height: 1.28; }
+  .official-letter.compact-letter .ol-yearline { margin: 4px 0 2px; font-size: 13px; }
+  .official-letter.compact-letter .ol-section { margin: 4px 0 2px; font-size: 12px; }
+  .official-letter.compact-letter .ol-para { margin: 5px 0; font-size: 14px; line-height: 1.28; }
+  .official-letter.compact-letter table.ol-table { font-size: 11.5px; margin: 2px 0 6px; }
+  .official-letter.compact-letter table.ol-table th, .official-letter.compact-letter table.ol-table td { padding: 2.5px 4px; }
+  .official-letter.compact-letter .ol-sign { margin-top: 10px; font-size: 14px; line-height: 1.28; }
+  .official-letter.compact-letter .ol-sign-space { height: 20px; }
 
   /* - Receipt - */
   .print-receipt { max-width: 680px; margin: 0 auto; padding: 10px; font-size: 14px; line-height: 1.5; }
@@ -1979,25 +2527,42 @@ export default function MComManagement({ currentUser }) {
   <div class="doc-page doc-page-receipt">${receiptHtml}</div>
   <script>
     window.addEventListener('load', function() {
-      // Auto-adjust font size to ensure it fits on one page
-      var letter = document.querySelector('.official-letter');
-      if (letter) {
-        var maxH = 750; // Safe max height that fits even if Chrome "Default" margins are active
-        var currentSize = 16;
-        while(letter.offsetHeight > maxH && currentSize > 12) {
-          currentSize -= 0.2;
-          letter.style.fontSize = currentSize + 'px';
-          
-          var title = letter.querySelector('.ol-title');
-          if (title) title.style.fontSize = currentSize + 'px';
-          
-          var tables = letter.querySelectorAll('.ol-table');
-          tables.forEach(function(t) {
-            t.style.fontSize = (currentSize - 2) + 'px';
-          });
-        }
-      }
+      try {
+        var letter = document.querySelector('.official-letter');
+        if (letter) {
+          // Available height on A4: 297mm (~1122.5px) - 2.7in top padding (~259.2px) - 45px safety bottom margin = ~818px
+          var maxH = 818;
+          var signSpace = letter.querySelector('.ol-sign-space');
 
+          // Only adjust if content actually overflows the single page height
+          if (letter.offsetHeight > maxH && signSpace) {
+            signSpace.style.height = '20px';
+          }
+          var currentSize = parseFloat(window.getComputedStyle(letter).fontSize) || 15;
+          while (letter.offsetHeight > maxH && currentSize > 11) {
+            currentSize -= 0.2;
+            letter.style.setProperty('font-size', currentSize + 'px', 'important');
+            letter.style.setProperty('line-height', (currentSize < 13 ? '1.22' : '1.28'), 'important');
+            var title = letter.querySelector('.ol-title');
+            if (title) title.style.setProperty('font-size', currentSize + 'px', 'important');
+            var paras = letter.querySelectorAll('.ol-para');
+            for (var p = 0; p < paras.length; p++) {
+              paras[p].style.setProperty('margin', (currentSize < 13 ? '4px 0' : '6px 0'), 'important');
+            }
+            var tables = letter.querySelectorAll('.ol-table');
+            for (var i = 0; i < tables.length; i++) {
+              tables[i].style.setProperty('font-size', Math.max(10, currentSize - 2.5) + 'px', 'important');
+              tables[i].style.setProperty('margin', '2px 0 6px', 'important');
+              var cells = tables[i].querySelectorAll('th, td');
+              for (var c = 0; c < cells.length; c++) {
+                cells[c].style.setProperty('padding', '2.5px 4px', 'important');
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error(err);
+      }
       setTimeout(function() {
         window.focus();
         // window.print() is handled by the outer component
@@ -2322,7 +2887,7 @@ export default function MComManagement({ currentUser }) {
     <div style={{ padding: 24, fontFamily: "var(--font-sans)", background: theme.bg, minHeight: '100vh' }}>
       <style>{`
         .official-letter { max-width: 680px; margin: 0; padding: 24px; font-family: 'Times New Roman', serif; color: #111; font-size: 16px; line-height: 1.4; }
-        .official-letter .ol-ref { display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 12px; }
+        .official-letter .ol-ref { display: flex; justify-content: space-between; font-weight: normal; margin-bottom: 12px; }
         .official-letter .ol-addr { margin-bottom: 10px; }
         .official-letter .ol-addr div { margin: 1px 0; }
         .official-letter .ol-title { text-align: left; font-weight: 700; text-decoration: underline; margin: 12px 0; white-space: normal; }
@@ -2338,9 +2903,13 @@ export default function MComManagement({ currentUser }) {
           .official-letter { padding: 6px 10px; font-size: 13.5px; }
         }
       `}</style>
-      <div style={{ fontSize: 12, color: '#999', marginBottom: 16 }}>
-        <span>Home</span> / <span>M.Com Management</span>
-      </div>
+      {showAgmPage ? (
+        <AgmManagementView onBack={() => setShowAgmPage(false)} onViewMc={openView} canEdit={canEdit} initialType="mcom" />
+      ) : (
+        <>
+          <div style={{ fontSize: 12, color: '#999', marginBottom: 16 }}>
+            <span>Home</span> / <span>M.Com Management</span>
+          </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 10 }}>
         <div>
@@ -2436,6 +3005,11 @@ export default function MComManagement({ currentUser }) {
                     <i className="fas fa-times" />
                   </button>
                 </div>
+                <div style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.border}`, background: '#f8fafc' }}>
+                  <button onClick={() => { setShowAgmPage(true); setShowAgmPanel(false); }} className="mc-btn-primary" style={{ ...btnPrimary, width: '100%', justifyContent: 'center' }}>
+                    <i className="fas fa-calendar-alt" style={{ marginRight: 6 }} /> Manage All AGMs
+                  </button>
+                </div>
                 {agmReminders.length === 0 ? (
                   <div style={{ padding: 14, fontSize: 12, color: theme.text3 }}>No AGMs scheduled soon.</div>
                 ) : agmReminders.map(({ mc, days }) => (
@@ -2479,7 +3053,7 @@ export default function MComManagement({ currentUser }) {
           return (
             <div
               key={label}
-              onClick={() => setStatusFilter(filterValue)}
+              onClick={() => setStatusFilter(prev => prev === filterValue ? '' : filterValue)}
               style={{
                 background: theme.card,
                 borderRadius: 12,
@@ -2506,10 +3080,10 @@ export default function MComManagement({ currentUser }) {
         })}
       </div>
 
-      <div className={`cma-table-card-container ${isZoomed ? 'table-fullscreen-mode' : ''}`} style={{ background: theme.card, borderRadius: 12, border: `1px solid ${theme.border}`, boxShadow: '0 2px 12px rgba(0,0,0,.07)', overflow: 'hidden' }}>
-        <div style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, whiteSpace: 'nowrap', marginRight: 4 }}>All M.Com Records</div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', flex: '1 1 auto', justifyContent: 'flex-end' }}>
+      <div className={`cma-table-card-container ${isZoomed ? 'table-fullscreen-mode' : ''}`} style={{ background: theme.card, borderRadius: 12, border: `1px solid ${theme.border}`, boxShadow: '0 2px 12px rgba(0,0,0,.07)' }}>
+        <div style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, whiteSpace: 'nowrap', marginRight: 4, flexShrink: 0 }}>All M.Com Records</div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flex: '1 1 auto', justifyContent: 'flex-end', minWidth: 0 }}>
             <div style={{ position: 'relative', flex: '1 1 180px', maxWidth: 260 }}>
               <i className="fas fa-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#999', fontSize: 12 }}></i>
               <input
@@ -2531,7 +3105,7 @@ export default function MComManagement({ currentUser }) {
               aria-label="Filter Status"
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 110 }}
+              style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 110, flexShrink: 0 }}
             >
               <option value="">All Status</option>
               <option value="New">New</option>
@@ -2545,7 +3119,7 @@ export default function MComManagement({ currentUser }) {
               aria-label="Filter Year"
               value={yearFilter}
               onChange={(e) => setYearFilter(e.target.value)}
-              style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 95 }}
+              style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 95, flexShrink: 0 }}
             >
               <option value="">All Years</option>
               {getYearFilterOptions().map((y) => (
@@ -2558,7 +3132,7 @@ export default function MComManagement({ currentUser }) {
               aria-label="Filter Month"
               value={monthFilter}
               onChange={(e) => setMonthFilter(e.target.value)}
-              style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 110 }}
+              style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 110, flexShrink: 0 }}
             >
               <option value="">All Months</option>
               {MONTH_OPTIONS.map((m) => (
@@ -2571,12 +3145,210 @@ export default function MComManagement({ currentUser }) {
               aria-label="Filter Category"
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value)}
-              style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 130 }}
+              style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 130, flexShrink: 0 }}
             >
               <option value="">All Categories</option>
               <option value="PVT M.COM">PVT M.COM</option>
               <option value="GOV M.COM">GOV M.COM</option>
             </select>
+
+            {/* Zone / Address Filter Dropdown */}
+            <div ref={zoneDropdownRef} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={() => setIsZoneOpen(v => !v)}
+                title={zoneFilter ? `Filtered by Zone: ${zoneFilter} (Click to change/clear)` : "Filter by Zone / Address"}
+                style={{
+                  width: 32,
+                  height: 30,
+                  padding: 0,
+                  borderRadius: 4,
+                  border: zoneFilter ? '1px solid #2563eb' : '1px solid #ddd',
+                  background: zoneFilter ? '#eff6ff' : '#ffffff',
+                  color: zoneFilter ? '#1d4ed8' : '#64748b',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 12,
+                  boxShadow: zoneFilter ? '0 1px 2px rgba(37,99,235,0.1)' : 'none',
+                  transition: 'all 0.15s ease',
+                  position: 'relative'
+                }}
+                onMouseEnter={(e) => {
+                  if (!zoneFilter) e.currentTarget.style.borderColor = '#94a3b8';
+                }}
+                onMouseLeave={(e) => {
+                  if (!zoneFilter) e.currentTarget.style.borderColor = '#ddd';
+                }}
+              >
+                <i className="fas fa-map-marker-alt" style={{ fontSize: 13, color: zoneFilter ? '#2563eb' : '#64748b' }} />
+                {zoneFilter ? (
+                  <span style={{ position: 'absolute', top: 3, right: 3, width: 6, height: 6, borderRadius: '50%', background: '#2563eb' }} />
+                ) : null}
+              </button>
+
+              {/* Dropdown Popover */}
+              {isZoneOpen && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 6px)',
+                    right: 0,
+                    width: 250,
+                    background: '#ffffff',
+                    borderRadius: 8,
+                    border: '1px solid #e2e8f0',
+                    boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.14), 0 8px 10px -6px rgba(0, 0, 0, 0.08)',
+                    zIndex: 1100,
+                    overflow: 'hidden',
+                    textAlign: 'left'
+                  }}
+                >
+                  {/* Header */}
+                  <div style={{ padding: '8px 12px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#1e293b' }}>
+                      <i className="fas fa-map-marker-alt" style={{ color: '#2563eb', fontSize: 11 }} />
+                      <span>Filter by Zone</span>
+                    </div>
+                    {zoneFilter && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setZoneFilter('');
+                          setIsZoneOpen(false);
+                        }}
+                        style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 11, cursor: 'pointer', fontWeight: 600, padding: '2px 4px' }}
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Quick Search */}
+                  <div style={{ padding: '8px 10px', borderBottom: '1px solid #f1f5f9', background: '#fff' }}>
+                    <div style={{ position: 'relative' }}>
+                      <i className="fas fa-search" style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: 11 }} />
+                      <input
+                        type="text"
+                        placeholder="Search zone / town..."
+                        value={zoneSearch}
+                        onChange={(e) => setZoneSearch(e.target.value)}
+                        autoFocus
+                        style={{
+                          width: '100%',
+                          padding: '5px 24px 5px 26px',
+                          fontSize: 12,
+                          borderRadius: 5,
+                          border: '1px solid #cbd5e1',
+                          outline: 'none',
+                          boxSizing: 'border-box'
+                        }}
+                      />
+                      {zoneSearch && (
+                        <i
+                          className="fas fa-times-circle"
+                          style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', cursor: 'pointer', fontSize: 11 }}
+                          onClick={() => setZoneSearch('')}
+                        />
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Scrollable Zone List */}
+                  <div style={{ maxHeight: 250, overflowY: 'auto' }}>
+                    {/* All Zones Option */}
+                    <div
+                      onClick={() => {
+                        setZoneFilter('');
+                        setIsZoneOpen(false);
+                      }}
+                      style={{
+                        padding: '7px 12px',
+                        fontSize: 12,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        background: !zoneFilter ? '#f1f5f9' : 'transparent',
+                        color: !zoneFilter ? '#0f172a' : '#475569',
+                        fontWeight: !zoneFilter ? 600 : 400,
+                        borderBottom: '1px solid #f8fafc'
+                      }}
+                      onMouseEnter={(e) => {
+                        if (zoneFilter) e.currentTarget.style.background = '#f8fafc';
+                      }}
+                      onMouseLeave={(e) => {
+                        if (zoneFilter) e.currentTarget.style.background = 'transparent';
+                      }}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                        <i className="fas fa-globe" style={{ fontSize: 11, color: !zoneFilter ? '#2563eb' : '#94a3b8' }} />
+                        <span>All Zones (Clear Filter)</span>
+                      </span>
+                      {!zoneFilter && <i className="fas fa-check" style={{ color: '#2563eb', fontSize: 11 }} />}
+                    </div>
+
+                    {/* Filtered Zones */}
+                    {ZONE_OPTIONS
+                      .filter(z => !zoneSearch || z.toLowerCase().includes(zoneSearch.trim().toLowerCase()))
+                      .map(zone => {
+                        const isSelected = zoneFilter === zone;
+                        return (
+                          <div
+                            key={zone}
+                            onClick={() => {
+                              setZoneFilter(zone);
+                              setIsZoneOpen(false);
+                              setZoneSearch('');
+                            }}
+                            style={{
+                              padding: '7px 12px',
+                              fontSize: 12,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              background: isSelected ? '#eff6ff' : 'transparent',
+                              color: isSelected ? '#1d4ed8' : '#334155',
+                              fontWeight: isSelected ? 600 : 400,
+                              transition: 'background 0.1s'
+                            }}
+                            onMouseEnter={(e) => {
+                              if (!isSelected) e.currentTarget.style.background = '#f8fafc';
+                            }}
+                            onMouseLeave={(e) => {
+                              if (!isSelected) e.currentTarget.style.background = 'transparent';
+                            }}
+                          >
+                            <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                              <i className="fas fa-map-pin" style={{ fontSize: 10, color: isSelected ? '#2563eb' : '#cbd5e1' }} />
+                              <span>{zone}</span>
+                            </span>
+                            {isSelected && <i className="fas fa-check" style={{ color: '#2563eb', fontSize: 11 }} />}
+                          </div>
+                        );
+                      })}
+
+                    {ZONE_OPTIONS.filter(z => !zoneSearch || z.toLowerCase().includes(zoneSearch.trim().toLowerCase())).length === 0 && (
+                      <div style={{ padding: '16px 12px', textAlign: 'center', color: '#94a3b8', fontSize: 12 }}>
+                        No zones match "{zoneSearch}"
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Footer with count */}
+                  <div style={{ padding: '6px 12px', background: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: '#64748b' }}>
+                    <span>{ZONE_OPTIONS.length} zones available</span>
+                    {zoneFilter ? (
+                      <span style={{ color: '#2563eb', fontWeight: 600 }}>Active</span>
+                    ) : (
+                      <span>None active</span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -2693,6 +3465,7 @@ export default function MComManagement({ currentUser }) {
                         {canHistory ? <ActionBtn icon="fas fa-history" color={theme.text2} title="History" onClick={() => { setSelectedHistoryRecord(mc); setShowHistoryModal(true); }} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
                         {canEdit ? <ActionBtn icon="fas fa-edit" color={theme.orange} title="Edit" onClick={() => openEdit(mc)} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
                         {canDelete ? <ActionBtn icon="fas fa-trash" color={theme.red} title="Delete" onClick={() => remove(mc.id)} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
+                        <ActionBtn icon="fas fa-receipt" color={theme.blue} title="View Registration Receipt" onClick={() => openRegistrationReceipt(mc)} />
                         {(canRenewal || canEdit) && <ActionBtn icon="fas fa-sync-alt" color={theme.green} title="Renewal" onClick={() => openRenewal(mc)} />}
                       </div>
                     </td>
@@ -2824,11 +3597,11 @@ export default function MComManagement({ currentUser }) {
                 <ViewField label="Attendance" value={viewRecord.attendance} />
                 <ViewField label="Audited Account" value={viewRecord.audited_account} />
                 <ViewField label="Building Insurance" value={viewRecord.building_insurance} />
-                <ViewField label="Active / Non Active" value={viewRecord.active_non_active} />
-                <ViewField label="Renewal Date Vise" value={viewRecord.renewal_date_vise} />
-                <ViewField label="AGM Date Vise" value={viewRecord.agm_date_vise} />
-                <ViewField label="Renewal Status" value={viewRecord.renewal_status} />
-                <ViewField label="AGM Status" value={viewRecord.agm_status} />
+                <ViewField label="Active / Non Active" value={viewRecord.active_non_active || viewRecord.renewal_date_vise || (viewRecord.renewal_period && parseInt(viewRecord.renewal_period, 10) >= new Date().getFullYear() ? 'Active' : 'Non Active')} />
+                <ViewField label="Renewal Date Vise" value={viewRecord.renewal_date_vise || (viewRecord.renewal_period && parseInt(viewRecord.renewal_period, 10) >= new Date().getFullYear() ? 'Active' : 'Non Active')} />
+                <ViewField label="AGM Date Vise" value={viewRecord.agm_date_vise || (viewRecord.next_agm_date && new Date(viewRecord.next_agm_date) >= new Date() ? 'Active' : 'Non Active')} />
+                <ViewField label="Renewal Status" value={viewRecord.renewal_status || viewRecord.renewal_date_vise || (viewRecord.renewal_period && parseInt(viewRecord.renewal_period, 10) >= new Date().getFullYear() ? 'Active' : 'Non Active')} />
+                <ViewField label="AGM Status" value={viewRecord.agm_status || viewRecord.agm_date_vise || (viewRecord.next_agm_date && new Date(viewRecord.next_agm_date) >= new Date() ? 'Active' : 'Non Active')} />
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
@@ -3254,7 +4027,7 @@ export default function MComManagement({ currentUser }) {
                             ? mc.renewal_paid_amount
                             : grandTotal;
 
-                          setAckOverrides({
+                          const cleanAckDefaults = {
                             refNo: mc.new_file_no || mc.file_no || mc.acknowledgement_no || '',
                             date: mc.acknowledgement_date || getServerDate().toISOString().slice(0, 10),
                             year: String(endPaidYear),
@@ -3265,9 +4038,22 @@ export default function MComManagement({ currentUser }) {
                             signName: 'Samantha Ampagala',
                             signTitle1: 'Assistant General Manager (Customer Care) ',
                             signTitle2: 'Condominium Management Authority',
-                            toEmail: mc.email_address || mc.secretary_email || ''
-                          });
+                            toEmail: mc.email_address || mc.secretary_email || '',
+                            customLetterHtml: null
+                          };
+
+                          const savedAck = loadMComAckOverrides(mc);
+                          const activeAck = savedAck ? { ...cleanAckDefaults, ...savedAck } : { ...cleanAckDefaults };
+
+                          setAckDefaultOverrides(cleanAckDefaults);
+                          setAckOverrides(activeAck);
+                          ackOverridesRef.current = activeAck;
+                          setAckCustomHtml(savedAck?.customLetterHtml || null);
+                          setAckSaved(!!savedAck);
+                          setAckRenderKey(prev => prev + 1);
+
                           setViewRecord(mc);
+                          setShowAckToolbar(false);
                           setAckModalOpen(true);
                         }}
                         style={{ ...btnPrimary, background: '#1a3a6b', padding: '7px 12px', gap: 6, fontSize: 12 }}>
@@ -3438,16 +4224,45 @@ export default function MComManagement({ currentUser }) {
       {/* Acknowledgement Letter Modal */}
       {ackModalOpen && viewRecord && (
         <div className="mc-overlay" onClick={(e) => e.target === e.currentTarget && setAckModalOpen(false)}>
-          <div className="mc-modal" style={{ maxWidth: 720, display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
+          <div className="mc-modal" style={{ maxWidth: 820, display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
             <div className="mc-modal-header">
               <span style={{ fontSize: 16, fontWeight: 700 }}>Acknowledgement Letter</span>
               <button onClick={() => setAckModalOpen(false)} className="mc-close-btn"><i className="fas fa-times" /></button>
             </div>
             <div style={{ padding: 22, overflowY: 'auto', flex: 1 }}>
               <>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginBottom: 14 }}>
-                  <button onClick={emailAcknowledgement} className="mc-btn-primary" style={{ padding: '9px 14px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '5px' }}><i className="fas fa-envelope" /> Email Acknowledgement</button>
-                  <button onClick={printAcknowledgement} className="mc-btn-primary" style={{ padding: '9px 14px' }} disabled={printingAck}><i className="fas fa-print" /> Print Acknowledgement</button>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginBottom: 14, alignItems: 'center', flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: 2 }}>
+                  {ackSaved && (
+                    <div style={{ fontSize: 11.5, color: '#16a34a', display: 'flex', alignItems: 'center', gap: 4, marginRight: 'auto', flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 600 }}>
+                      <i className="fas fa-check-circle" /> Saved locally
+                    </div>
+                  )}
+                  <button
+                    onClick={() => setShowAckToolbar(prev => !prev)}
+                    className="mc-btn-outline"
+                    style={{ padding: '6px 11px', borderRadius: '5px', display: 'inline-flex', alignItems: 'center', gap: 5, color: '#0284c7', borderColor: '#0284c7', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', background: '#fff' }}
+                    title="Toggle text editing formatting tools"
+                  >
+                    <i className="fas fa-edit" /> {showAckToolbar ? 'Hide Tools' : 'Edit Tools'}
+                  </button>
+                  <button
+                    onClick={handleUndoAck}
+                    className="mc-btn-outline"
+                    style={{ padding: '6px 11px', borderRadius: '5px', color: '#b45309', borderColor: '#d97706', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', background: '#fff' }}
+                    title="Reset all edits back to defaults"
+                  >
+                    <i className="fas fa-undo" /> Undo All
+                  </button>
+                  <button
+                    onClick={handleSaveAck}
+                    className="mc-btn-outline"
+                    style={{ padding: '6px 11px', borderRadius: '5px', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', background: '#fff' }}
+                    title="Save letter changes"
+                  >
+                    <i className="fas fa-save" /> Save Changes
+                  </button>
+                  <button onClick={emailAcknowledgement} className="mc-btn-primary" style={{ padding: '6px 12px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '5px', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer' }}><i className="fas fa-envelope" /> Email Acknowledgement</button>
+                  <button onClick={printAcknowledgement} className="mc-btn-primary" style={{ padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer' }} disabled={printingAck}><i className="fas fa-print" /> Print Acknowledgement</button>
                 </div>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 15, background: '#f8fafc', padding: 15, borderRadius: 8, border: '1px solid #e2e8f0' }}>
                   <div style={{ width: '100%', fontSize: 13, fontWeight: 'bold', marginBottom: 5, color: '#334155' }}>Edit Letter Variables:</div>
@@ -3556,7 +4371,12 @@ export default function MComManagement({ currentUser }) {
                     </div>
                   </div>
                 </div>
-                <div style={{ border: `1px solid ${theme.border}`, borderRadius: 10 }}>
+                <div style={{ marginBottom: 10, padding: '8px 12px', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, fontSize: 12, color: '#0369a1', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <i className="fas fa-pencil-alt" style={{ fontSize: 11 }} />
+                  <span>Click on any text in the letter below to edit it directly. Changes are reflected immediately.</span>
+                </div>
+                {showAckToolbar && <RichTextToolbar style={{ marginBottom: 0, borderRadius: '8px 8px 0 0' }} />}
+                <div key={ackRenderKey} style={{ border: `1px solid ${theme.border}`, borderTop: showAckToolbar ? 'none' : `1px solid ${theme.border}`, borderRadius: showAckToolbar ? '0 0 8px 8px' : 10, background: '#fff' }}>
                   {renderAcknowledgementLetter(viewRecord)}
                 </div>
               </>
@@ -3571,7 +4391,7 @@ export default function MComManagement({ currentUser }) {
       {/* ── MCom Renewal Letter Edit Modal ─────────────────────────────── */}
       {rlLetterModalOpen && rlLetterRecord && (
         <div className="mc-overlay" onClick={(e) => { if (e.target === e.currentTarget) setRlLetterModalOpen(false); }}>
-          <div className="mc-modal" style={{ maxWidth: 720, display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
+          <div className="mc-modal" style={{ maxWidth: 820, display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
             <div className="mc-modal-header">
               <span style={{ fontSize: 16, fontWeight: 700 }}>Edit Renewal Letter</span>
               <span style={{ fontSize: 12, color: '#64748b', marginLeft: 8 }}>{rlLetterRecord.mc.new_file_no || rlLetterRecord.mc.file_no}</span>
@@ -3579,40 +4399,75 @@ export default function MComManagement({ currentUser }) {
             </div>
             <div style={{ padding: 22, overflowY: 'auto', flex: 1 }}>
               <>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginBottom: 14, alignItems: 'center' }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginBottom: 14, alignItems: 'center', flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: 2 }}>
                   {rlSaved && (
-                    <div style={{ fontSize: 12, color: '#16a34a', display: 'flex', alignItems: 'center', gap: 5, marginRight: 'auto' }}>
+                    <div style={{ fontSize: 11.5, color: '#16a34a', display: 'flex', alignItems: 'center', gap: 4, marginRight: 'auto', flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 600 }}>
                       <i className="fas fa-check-circle" /> Saved locally
                     </div>
                   )}
+                  <button
+                    onClick={() => setShowRlToolbar(prev => !prev)}
+                    className="mc-btn-outline"
+                    style={{ padding: '6px 11px', borderRadius: '5px', display: 'inline-flex', alignItems: 'center', gap: 5, color: '#0284c7', borderColor: '#0284c7', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', background: '#fff' }}
+                    title="Toggle text editing formatting tools"
+                  >
+                    <i className="fas fa-edit" /> {showRlToolbar ? 'Hide Tools' : 'Edit Tools'}
+                  </button>
                   {/* Undo Button */}
                   <button
-                    onClick={() => { setRlOverrides(rlDefaultOverrides); setRlSaved(false); }}
+                    onClick={() => {
+                      const freshToday = getTodayDotDate();
+                      const resetDefaults = { ...(rlDefaultOverrides || {}), date: freshToday, isManualDate: false, customLetterHtml: null };
+                      rlOverridesRef.current = resetDefaults;
+                      setRlOverrides(resetDefaults);
+                      try {
+                        localStorage.removeItem(getMComRlStorageKey(rlLetterRecord.mc));
+                      } catch {}
+                      setRlSaved(false);
+                      setLetterRenderKey(prev => prev + 1);
+                      showToast('Reset letter back to original defaults! ↺', 'info');
+                    }}
                     className="mc-btn-outline"
-                    style={{ padding: '9px 14px', borderRadius: '5px', color: '#b45309', borderColor: '#d97706' }}
+                    style={{ padding: '6px 11px', borderRadius: '5px', color: '#b45309', borderColor: '#d97706', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', background: '#fff' }}
                     title="Reset all edits back to defaults"
                   >
                     <i className="fas fa-undo" /> Undo All
                   </button>
                   <button
                     onClick={() => {
-                      saveMComRlOverrides(rlLetterRecord.mc, rlOverrides);
+                      const el = document.getElementById('mcom-rl-letter-content-render');
+                      const customHtml = el ? el.innerHTML : null;
+                      const toSave = {
+                        ...rlOverridesRef.current,
+                        customLetterHtml: customHtml
+                      };
+                      rlOverridesRef.current = toSave;
+                      setRlOverrides(toSave);
+                      saveMComRlOverrides(rlLetterRecord.mc, toSave);
                       setRlSaved(true);
-                      showToast('Letter settings saved!', 'success');
+                      showToast('Letter settings saved successfully! ✅', 'success');
                     }}
                     className="mc-btn-outline"
-                    style={{ padding: '9px 14px', borderRadius: '5px' }}
+                    style={{ padding: '6px 11px', borderRadius: '5px', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', background: '#fff' }}
                   >
                     <i className="fas fa-save" /> Save Changes
                   </button>
                   <button
                     onClick={() => {
-                      saveMComRlOverrides(rlLetterRecord.mc, rlOverrides);
+                      const el = document.getElementById('mcom-rl-letter-content-render');
+                      const customHtml = el ? el.innerHTML : null;
+                      const toSave = {
+                        ...rlOverridesRef.current,
+                        customLetterHtml: customHtml
+                      };
+                      rlOverridesRef.current = toSave;
+                      setRlOverrides(toSave);
+                      saveMComRlOverrides(rlLetterRecord.mc, toSave);
                       setRlLetterModalOpen(false);
-                      printRenewalLetter(rlLetterRecord.mc, rlLetterRecord.multiRows, rlOverrides);
+                      printRenewalLetter(rlLetterRecord.mc, rlLetterRecord.multiRows, toSave);
                     }}
                     className="mc-btn-primary"
-                    style={{ padding: '9px 14px' }}
+                    style={{ padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer' }}
                   >
                     <i className="fas fa-print" /> Print Letter
                   </button>
@@ -3626,24 +4481,21 @@ export default function MComManagement({ currentUser }) {
                     return isNaN(parsed) ? 0 : parsed;
                   };
 
-                  const formatDotDate = (dStr) => {
-                    if (!dStr) return '';
-                    const d = new Date(dStr);
-                    if (Number.isNaN(d.getTime())) return dStr;
-                    return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '.');
-                  };
                   const displayRows = rlOverrides.tableRows || [];
                   const preDisplayRows = displayRows.filter(r => r.isPre);
                   const postDisplayRows = displayRows.filter(r => !r.isPre);
 
                   const firstYear = rlLetterRecord.multiRows.length > 0 ? rlLetterRecord.multiRows[0].year : getServerDate().getFullYear();
                   const lastYear = rlLetterRecord.multiRows.length > 0 ? rlLetterRecord.multiRows[rlLetterRecord.multiRows.length - 1].year : getServerDate().getFullYear();
-                  const periodLabel = firstYear === lastYear
+                  const defaultPeriodLabel = firstYear === lastYear
                     ? `(01/01/${lastYear} - 31/12/${lastYear})`
                     : `(01/01/${firstYear} - 31/12/${lastYear})`;
+                  const periodLabel = rlOverrides.periodLabel || defaultPeriodLabel;
 
                   const onUpdateOverrides = (patch) => {
-                    setRlOverrides(prev => ({ ...prev, ...patch }));
+                    rlOverridesRef.current = { ...rlOverridesRef.current, ...patch };
+                    setRlOverrides(rlOverridesRef.current);
+                    setRlSaved(false);
                   };
 
                   const updateTableCell = (globalIdx, field) => (e) => {
@@ -3665,11 +4517,23 @@ export default function MComManagement({ currentUser }) {
                   );
 
                   const refDisplay = rlOverrides.refNo || (rlLetterRecord.mc.new_file_no || rlLetterRecord.mc.file_no || '-');
-                  const dateDisplay = rlOverrides.date ? formatDotDate(rlOverrides.date) : formatDotDate(getServerDate().toISOString().slice(0, 10));
-                  const signName = rlOverrides.signName || 'Arct.M.T. Kapila Priyantha';
-                  const signTitle1 = rlOverrides.signTitle1 || 'General Manager';
+                  const dateDisplay = rlOverrides.date ? formatDotDate(rlOverrides.date) : getTodayDotDate();
+                  const rawSignName = rlOverrides.signName || 'Samantha Ampagala';
+                  const signName = (rawSignName === 'Arct.M.T. Kapila Priyantha' || rawSignName === 'Samantha Ampaala') ? 'Samantha Ampagala' : rawSignName;
+                  const signTitle1 = (!rlOverrides.signTitle1 || rlOverrides.signTitle1 === 'General Manager') ? 'Assistant General Manager (Customer Care)' : rlOverrides.signTitle1;
                   const signTitle2 = rlOverrides.signTitle2 || 'Condominium Management Authority';
                   const addressLines = String(rlLetterRecord.mc.address || '').split(/\r?\n|,/).map(l => l.trim()).filter(Boolean);
+
+                  const defaultRecipientHtml = `<div>The Secretary,</div>` +
+                    `<div>${escapeHtml(rlLetterRecord.mc.management_corporation_name || '-')}</div>` +
+                    addressLines.map(l => `<div>${escapeHtml(l)}</div>`).join('');
+                  const defaultTitleHtml = `RENEWAL REGISTRATION OF THE MANAGEMENT COMMITTEE FOR YEAR<br/>${periodLabel}`;
+                  const defaultPrePeriodHeading = preDisplayRows.length > 0
+                    ? `Period ${preDisplayRows[0].yearLabel}${preDisplayRows.length > 1 ? ` - ${preDisplayRows[preDisplayRows.length - 1].yearLabel}` : ''}`
+                    : '';
+                  const defaultPostPeriodHeading = postDisplayRows.length > 0
+                    ? `Period ${postDisplayRows[0].yearLabel}${postDisplayRows.length > 1 ? ` - ${postDisplayRows[postDisplayRows.length - 1].yearLabel}` : ''}`
+                    : '';
 
                   const editableStyle = {
                     outline: 'none',
@@ -3691,11 +4555,22 @@ export default function MComManagement({ currentUser }) {
                     <>
                       <div style={{ marginBottom: 10, padding: '8px 12px', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, fontSize: 12, color: '#0369a1', display: 'flex', alignItems: 'center', gap: 6 }}>
                         <i className="fas fa-pencil-alt" style={{ fontSize: 11 }} />
-                        Click on any text in the letter below to edit it directly. Changes are reflected immediately.
+                        <span>Click on any text in the letter below to edit it directly. Changes are reflected immediately.</span>
                       </div>
-                      <div style={{ border: `1px solid ${theme.border}`, borderRadius: 10, padding: '20px 24px', background: '#fff' }}>
-                        <div className="official-letter" style={{ fontFamily: 'Times New Roman, serif', fontSize: 15, lineHeight: 1.6 }}>
-                          <div className="ol-ref" style={{ overflow: 'hidden', fontWeight: 700, marginBottom: 12 }}>
+                      {showRlToolbar && <RichTextToolbar style={{ marginBottom: 0, borderRadius: '8px 8px 0 0' }} />}
+                      <div key={letterRenderKey} id="mcom-rl-letter-content-render" style={{ border: `1px solid ${theme.border}`, borderTop: showRlToolbar ? 'none' : `1px solid ${theme.border}`, borderRadius: showRlToolbar ? '0 0 8px 8px' : 10, padding: '20px 24px', background: '#fff' }}>
+                        {rlOverrides.customLetterHtml ? (
+                          <div
+                            className="official-letter"
+                            contentEditable
+                            suppressContentEditableWarning
+                            style={{ fontFamily: 'Times New Roman, serif', fontSize: 16, lineHeight: 1.4, outline: 'none' }}
+                            dangerouslySetInnerHTML={{ __html: rlOverrides.customLetterHtml }}
+                            onInput={() => setRlSaved(false)}
+                          />
+                        ) : (
+                        <div className="official-letter" style={{ fontFamily: 'Times New Roman, serif', fontSize: 16, lineHeight: 1.4 }}>
+                          <div className="ol-ref" style={{ overflow: 'hidden', fontWeight: 'normal', marginBottom: 12 }}>
                             <span
                               contentEditable
                               suppressContentEditableWarning
@@ -3706,7 +4581,7 @@ export default function MComManagement({ currentUser }) {
                               contentEditable
                               suppressContentEditableWarning
                               style={{ ...editableStyle, float: 'right' }}
-                              onBlur={(e) => onUpdateOverrides({ date: e.currentTarget.innerText.trim() })}
+                              onBlur={(e) => onUpdateOverrides({ date: e.currentTarget.innerText.trim(), isManualDate: true })}
                             >{dateDisplay}</span>
                           </div>
 
@@ -3715,20 +4590,18 @@ export default function MComManagement({ currentUser }) {
                             contentEditable
                             suppressContentEditableWarning
                             style={{ ...editableBlockStyle, marginBottom: 12 }}
-                          >
-                            <div>The Secretary,</div>
-                            <div>{rlLetterRecord.mc.management_corporation_name}</div>
-                            {addressLines.map((l, i) => <div key={i}>{l}</div>)}
-                          </div>
+                            onBlur={(e) => onUpdateOverrides({ recipientHtml: e.currentTarget.innerHTML })}
+                            dangerouslySetInnerHTML={{ __html: rlOverrides.recipientHtml || defaultRecipientHtml }}
+                          />
 
                           <div
                             className="ol-title"
                             contentEditable
                             suppressContentEditableWarning
                             style={{ ...editableBlockStyle, fontWeight: 700, textDecoration: 'underline', marginBottom: 10 }}
-                          >
-                            RENEWAL REGISTRATION OF THE MANAGEMENT COMMITTEE FOR YEAR<br />{periodLabel}
-                          </div>
+                            onBlur={(e) => onUpdateOverrides({ titleHtml: e.currentTarget.innerHTML })}
+                            dangerouslySetInnerHTML={{ __html: rlOverrides.titleHtml || defaultTitleHtml }}
+                          />
 
                           <p
                             className="ol-para"
@@ -3742,7 +4615,14 @@ export default function MComManagement({ currentUser }) {
                           {/* Pre-2023 grouped table */}
                           {preDisplayRows.length > 0 && (
                             <>
-                              <p className="ol-section" style={{ fontWeight: 700, margin: '10px 0 4px' }}>Period {preDisplayRows[0].yearLabel}{preDisplayRows.length > 1 ? ` - ${preDisplayRows[preDisplayRows.length - 1].yearLabel}` : ''}</p>
+                              <p
+                                className="ol-section"
+                                contentEditable
+                                suppressContentEditableWarning
+                                style={{ ...editableBlockStyle, fontWeight: 700, margin: '10px 0 4px' }}
+                                onBlur={(e) => onUpdateOverrides({ prePeriodHeading: e.currentTarget.innerText.trim() })}
+                                dangerouslySetInnerHTML={{ __html: rlOverrides.prePeriodHeading || defaultPrePeriodHeading }}
+                              />
                               <table className="ol-table" style={{ width: '100%', borderCollapse: 'collapse', margin: '6px 0 12px', fontSize: 13 }}>
                                 <thead>
                                   <tr style={{ background: '#f4f4f4' }}>
@@ -3784,13 +4664,27 @@ export default function MComManagement({ currentUser }) {
                           )}
 
                           {preDisplayRows.length > 0 && postDisplayRows.length > 0 && (
-                            <p className="ol-para" style={{ margin: '14px 0', textAlign: 'justify' }}>We wish to inform you that charges have been revised and are applicable per unit basis from 01.03.2023 as follows.</p>
+                            <p
+                              className="ol-para"
+                              contentEditable
+                              suppressContentEditableWarning
+                              style={{ ...editableBlockStyle, margin: '14px 0', textAlign: 'justify' }}
+                              onBlur={(e) => onUpdateOverrides({ transitionalText: e.currentTarget.innerHTML })}
+                              dangerouslySetInnerHTML={{ __html: rlOverrides.transitionalText || 'We wish to inform you that charges have been revised and are applicable per unit basis from 01.03.2023 as follows.' }}
+                            />
                           )}
 
                           {/* Post-2023 individual years table */}
                           {postDisplayRows.length > 0 && (
                             <>
-                              <p className="ol-section" style={{ fontWeight: 700, margin: '10px 0 4px' }}>Period {postDisplayRows[0].yearLabel}{postDisplayRows.length > 1 ? ` - ${postDisplayRows[postDisplayRows.length - 1].yearLabel}` : ''}</p>
+                              <p
+                                className="ol-section"
+                                contentEditable
+                                suppressContentEditableWarning
+                                style={{ ...editableBlockStyle, fontWeight: 700, margin: '10px 0 4px' }}
+                                onBlur={(e) => onUpdateOverrides({ postPeriodHeading: e.currentTarget.innerText.trim() })}
+                                dangerouslySetInnerHTML={{ __html: rlOverrides.postPeriodHeading || defaultPostPeriodHeading }}
+                              />
                               <table className="ol-table" style={{ width: '100%', borderCollapse: 'collapse', margin: '6px 0 12px', fontSize: 13 }}>
                                 <thead>
                                   <tr style={{ background: '#f4f4f4' }}>
@@ -3840,29 +4734,53 @@ export default function MComManagement({ currentUser }) {
                             dangerouslySetInnerHTML={{ __html: rlOverrides.bodyParagraph2 }}
                           />
 
-                          <p className="ol-para" style={{ marginBottom: 8 }}>Thank You.</p>
-                          <p className="ol-para" style={{ marginBottom: 8 }}>Yours Faithfully,</p>
-
-                          <div
-                            className="ol-sign"
+                          <p
+                            className="ol-para"
                             contentEditable
                             suppressContentEditableWarning
-                            style={{ ...editableBlockStyle, marginTop: 20 }}
-                            onBlur={(e) => {
-                              const lines = e.currentTarget.innerText.split('\n').filter(l => l.trim());
-                              onUpdateOverrides({
-                                signName: lines[0] || signName,
-                                signTitle1: lines[1] || signTitle1,
-                                signTitle2: lines[2] || signTitle2,
-                              });
-                            }}
-                          >
+                            style={{ ...editableBlockStyle, marginBottom: 12 }}
+                            onBlur={(e) => onUpdateOverrides({ paymentNote: e.currentTarget.innerHTML })}
+                            dangerouslySetInnerHTML={{ __html: rlOverrides.paymentNote || 'Payment with regard to the above can be paid by cash or cheque in favor of &quot;<strong>Condominium Management Authority</strong>&quot;' }}
+                          />
+
+                          <p
+                            className="ol-para"
+                            contentEditable
+                            suppressContentEditableWarning
+                            style={{ ...editableBlockStyle, marginBottom: 8 }}
+                            onBlur={(e) => onUpdateOverrides({ closingNote1: e.currentTarget.innerText.trim() })}
+                          >{rlOverrides.closingNote1 || 'Thank You.'}</p>
+                          <p
+                            className="ol-para"
+                            contentEditable
+                            suppressContentEditableWarning
+                            style={{ ...editableBlockStyle, marginBottom: 8 }}
+                            onBlur={(e) => onUpdateOverrides({ closingNote2: e.currentTarget.innerText.trim() })}
+                          >{rlOverrides.closingNote2 || 'Yours Faithfully,'}</p>
+
+                          <div className="ol-sign" style={{ marginTop: 20 }}>
                             <div style={{ height: 35 }} />
-                            <div><strong>{signName}</strong></div>
-                            <div><strong>{signTitle1}</strong></div>
-                            <div><strong>{signTitle2}</strong></div>
+                            <div
+                              contentEditable
+                              suppressContentEditableWarning
+                              style={editableBlockStyle}
+                              onBlur={(e) => onUpdateOverrides({ signName: e.currentTarget.innerText.trim() })}
+                            ><strong>{signName}</strong></div>
+                            <div
+                              contentEditable
+                              suppressContentEditableWarning
+                              style={editableBlockStyle}
+                              onBlur={(e) => onUpdateOverrides({ signTitle1: e.currentTarget.innerText.trim() })}
+                            ><strong>{signTitle1}</strong></div>
+                            <div
+                              contentEditable
+                              suppressContentEditableWarning
+                              style={editableBlockStyle}
+                              onBlur={(e) => onUpdateOverrides({ signTitle2: e.currentTarget.innerText.trim() })}
+                            ><strong>{signTitle2}</strong></div>
                           </div>
                         </div>
+                        )}
                       </div>
                     </>
                   );
@@ -3893,6 +4811,72 @@ export default function MComManagement({ currentUser }) {
               }} disabled={markingRenewalPaid || !rejectReason.trim()} className="mc-btn-primary" style={{ background: '#dc2626', color: '#fff', border: 'none', padding: '7px 16px', borderRadius: 6, cursor: (markingRenewalPaid || !rejectReason.trim()) ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: (markingRenewalPaid || !rejectReason.trim()) ? 0.6 : 1 }}>
                 {markingRenewalPaid ? 'Rejecting...' : 'Confirm Reject'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Registration Receipt Modal */}
+      {regReceiptModalOpen && regReceiptRecord && (
+        <div className="mc-overlay" onClick={(e) => { if (e.target === e.currentTarget) setRegReceiptModalOpen(false); }}>
+          <div className="mc-modal" style={{ maxWidth: 780, display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
+            <div className="mc-modal-header">
+              <span style={{ fontSize: 16, fontWeight: 700 }}>Registration Receipt</span>
+              <button onClick={() => setRegReceiptModalOpen(false)} className="mc-close-btn"><i className="fas fa-times" /></button>
+            </div>
+
+            <div style={{ padding: 22, overflowY: 'auto', flex: 1 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 18 }}>
+                <div>
+                  <div style={{ fontSize: 13, color: theme.text2, marginBottom: 4 }}>Receipt Number</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: theme.navy }}>{regReceiptRecord.fileNo}</div>
+                </div>
+                <button
+                  onClick={() => printStandaloneRegistrationReceipt(regReceiptRecord)}
+                  className="mc-btn-primary"
+                  style={{ padding: '9px 14px' }}
+                >
+                  <i className="fas fa-print" /> Print Receipt
+                </button>
+              </div>
+
+              <div style={{ border: `1px solid ${theme.border}`, borderRadius: 10, background: '#f8fafc', padding: 16, marginBottom: 20, marginTop: 18 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: theme.navy, marginBottom: 12 }}>Payable Summary</div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '480px', fontSize: 11 }}>
+                    <tbody>
+                      <tr>
+                        <td style={{ padding: '6px 8px', borderBottom: `1px solid ${theme.border}`, fontSize: 11, whiteSpace: 'nowrap' }}>Category</td>
+                        <td style={{ padding: '6px 8px', borderBottom: `1px solid ${theme.border}`, fontSize: 11, whiteSpace: 'nowrap' }}>{regReceiptRecord.category || '-'}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: '6px 8px', borderBottom: `1px solid ${theme.border}`, fontSize: 11, whiteSpace: 'nowrap' }}>Rate per Unit</td>
+                        <td style={{ padding: '6px 8px', borderBottom: `1px solid ${theme.border}`, fontSize: 11, whiteSpace: 'nowrap' }}>Rs. {Number(regReceiptRecord.rate).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: '6px 8px', borderBottom: `1px solid ${theme.border}`, fontSize: 11, whiteSpace: 'nowrap' }}>Number of Parcels (Units)</td>
+                        <td style={{ padding: '6px 8px', borderBottom: `1px solid ${theme.border}`, fontSize: 11, whiteSpace: 'nowrap' }}>{regReceiptRecord.units}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: '6px 8px', borderBottom: `1px solid ${theme.border}`, fontSize: 11, whiteSpace: 'nowrap' }}>Fee</td>
+                        <td style={{ padding: '6px 8px', borderBottom: `1px solid ${theme.border}`, fontSize: 11, whiteSpace: 'nowrap' }}>Rs. {Number(regReceiptRecord.fee).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: '6px 8px', borderBottom: `1px solid ${theme.border}`, fontSize: 11, whiteSpace: 'nowrap' }}>SSCL ({SSCL_RATE * 100}%)</td>
+                        <td style={{ padding: '6px 8px', borderBottom: `1px solid ${theme.border}`, fontSize: 11, whiteSpace: 'nowrap' }}>Rs. {Number(regReceiptRecord.sscl).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: '6px 8px', borderBottom: `1px solid ${theme.border}`, fontSize: 11, whiteSpace: 'nowrap' }}>VAT ({VAT_RATE * 100}%)</td>
+                        <td style={{ padding: '6px 8px', borderBottom: `1px solid ${theme.border}`, fontSize: 11, whiteSpace: 'nowrap' }}>Rs. {Number(regReceiptRecord.vat).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: '8px', borderBottom: `1px solid ${theme.border}`, fontWeight: 700, color: theme.navy, fontSize: 11.5, whiteSpace: 'nowrap' }}>Total Amount Payable</td>
+                        <td style={{ padding: '8px', borderBottom: `1px solid ${theme.border}`, fontWeight: 700, color: theme.navy, fontSize: 11.5, whiteSpace: 'nowrap' }}>Rs. {Number(regReceiptRecord.total).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -3992,6 +4976,8 @@ export default function MComManagement({ currentUser }) {
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

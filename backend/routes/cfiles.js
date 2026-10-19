@@ -24,6 +24,65 @@ const { backupAfter } = require('../utils/sqlbackup');
 // Get the Cfile model from Sequelize
 const { Cfile } = db.models;
 
+function sanitizeDateValue(v) {
+  if (v === null || v === undefined) return null;
+  if (v instanceof Date) {
+    return isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
+  }
+  if (typeof v === 'number') {
+    if (v >= 1000 && v <= 100000) {
+      const epoch = new Date(Date.UTC(1899, 11, 30));
+      epoch.setUTCDate(epoch.getUTCDate() + Math.floor(v));
+      return epoch.toISOString().slice(0, 10);
+    }
+    return null;
+  }
+  const s = String(v).trim();
+  if (!s) return null;
+  if (/^[_.\-\/\s]+$/.test(s) || /^(n\/?a|nil|none|null|undefined|pending|tbd|\?|0000-00-00|00\/00\/0000|not\s+applicable|not\s+yet)$/i.test(s)) {
+    return null;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const isoMatch = s.match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
+  if (isoMatch) return isoMatch[1];
+  const ymdMatch = s.match(/^(\d{4})[./](\d{1,2})[./](\d{1,2})$/);
+  if (ymdMatch) {
+    const y = ymdMatch[1];
+    const m = ymdMatch[2].padStart(2, '0');
+    const d = ymdMatch[3].padStart(2, '0');
+    if (parseInt(m, 10) >= 1 && parseInt(m, 10) <= 12 && parseInt(d, 10) >= 1 && parseInt(d, 10) <= 31) {
+      return `${y}-${m}-${d}`;
+    }
+  }
+  const dmyMatch = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  if (dmyMatch) {
+    const day = parseInt(dmyMatch[1], 10);
+    const month = parseInt(dmyMatch[2], 10);
+    const year = parseInt(dmyMatch[3], 10);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 1900 && year <= 2100) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+  if (/^\d{4,5}$/.test(s)) {
+    const num = parseInt(s, 10);
+    if (num >= 1000 && num <= 99999) {
+      const epoch = new Date(Date.UTC(1899, 11, 30));
+      epoch.setUTCDate(epoch.getUTCDate() + num);
+      return epoch.toISOString().slice(0, 10);
+    }
+  }
+  const parsed = new Date(s);
+  if (!isNaN(parsed.getTime())) {
+    const yr = parsed.getFullYear();
+    if (yr >= 1900 && yr <= 2100) {
+      const mm = String(parsed.getMonth() + 1).padStart(2, '0');
+      const dd = String(parsed.getDate()).padStart(2, '0');
+      return `${yr}-${mm}-${dd}`;
+    }
+  }
+  return null;
+}
+
 // ── GET /api/cfiles ─ List C-files with optional filters ────────────────────
 // Query params:
 //   ?category=Structural  → filter by category or reason field
@@ -150,6 +209,44 @@ router.get('/dashboard/pending', async (req, res) => {
   }
 });
 
+// ── GET /api/cfiles/stats/summary ─ System-wide summary counts ──────────────
+router.get('/stats/summary', async (req, res) => {
+  try {
+    const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
+    const formattedDate = fifteenDaysAgo.toISOString().split('T')[0];
+
+    const [total, pending, newCount, closedCount, transferredCount, overdueCount, categories] = await Promise.all([
+      Cfile.count(),
+      Cfile.count({ where: { status: 'Pending' } }),
+      Cfile.count({ where: { status: 'New' } }),
+      Cfile.count({ where: { status: 'Closed' } }),
+      Cfile.count({ where: { status: 'Transferred' } }),
+      Cfile.count({ where: { status: 'Pending', date: { [Op.lte]: formattedDate, [Op.ne]: '' } } }),
+      Cfile.findAll({
+        attributes: [[db.sequelize.fn('DISTINCT', db.sequelize.col('category')), 'category']],
+        where: { category: { [Op.ne]: null } },
+        raw: true,
+      })
+    ]);
+
+    const distinctCats = categories.map(c => c.category).filter(Boolean);
+
+    res.json({
+      total,
+      pending,
+      new: newCount,
+      closed: closedCount,
+      transferred: transferredCount,
+      overdue: overdueCount,
+      totalCategories: distinctCats.length,
+      categories: distinctCats
+    });
+  } catch (err) {
+    console.error('GET /cfiles/stats/summary error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch C-files summary' });
+  }
+});
+
 // ── POST /api/cfiles ─ Create a single C-file ──────────────────────────────
 // Required field: file_no (must be unique)
 router.post('/', async (req, res) => {
@@ -177,7 +274,7 @@ router.post('/', async (req, res) => {
       file_no,
       name_of_apartment,
       address,
-      date,
+      date: sanitizeDateValue(date),
       reason,
       complainer_details,
       registered_ccu_file_no,
@@ -221,6 +318,9 @@ router.post('/bulk', async (req, res) => {
     for (const rec of records) {
       try {
         if (!rec.file_no) continue; // Skip records without file_no
+        if ('date' in rec) {
+          rec.date = sanitizeDateValue(rec.date);
+        }
 
         const importUser = rec.user_name || rec.created_by || 'Bulk Import';
         const [cfile, created] = await Cfile.findOrCreate({
@@ -365,6 +465,9 @@ router.patch('/:id', async (req, res) => {
       history = [];
     }
     const data = req.body;
+    if ('date' in data) {
+      data.date = sanitizeDateValue(data.date);
+    }
     const changedFields = [];
     const ignoreFields = ['updated_at', 'created_at', 'modified_by', 'created_by', 'history', 'user_name'];
     for (const key of Object.keys(data)) {

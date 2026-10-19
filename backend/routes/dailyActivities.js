@@ -137,7 +137,7 @@ module.exports = (models) => {
       // We fetch more records (limit * 5) from DB so we can filter out Bulk imports in JS
       // This prevents the bug where a record that was once bulk imported (and has 'Bulk' in its history)
       // is forever excluded from the timeline even if it's manually updated later.
-      const fetchLimit = limit * 5;
+      const fetchLimit = Math.min(limit * 5, 800);
 
       const user_id = req.query.user_id;
 
@@ -233,16 +233,7 @@ module.exports = (models) => {
         });
       });
 
-      invoices.forEach(i => {
-        const { name, note } = getLatestAction(i, 'updated Invoice');
-        logs.push({
-          id: `invoice-${i.id}`,
-          time: i.updated_at || i.created_at,
-          user: name,
-          action: `${note} — Invoice ${i.invoice_number || i.id}`,
-          text: `${name}: ${note} — Invoice ${i.invoice_number || i.id}`
-        });
-      });
+      // Note: invoices are already handled above via extractAllActions — no duplicate loop needed.
 
       reports.forEach(r => {
         logs.push({

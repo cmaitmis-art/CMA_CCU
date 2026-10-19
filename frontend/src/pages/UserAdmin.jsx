@@ -717,6 +717,114 @@ function SystemSettingsTab() {
 }
 
 
+const allModules = [
+  { id: 'dashboard', label: 'Dashboard', actions: ['view'] },
+  { id: 'registration', label: 'Registration Form', actions: ['view', 'create', 'edit', 'delete', 'approve'] },
+  { id: 'renewal_approval', label: 'Renewal Approvals', actions: ['view', 'edit', 'delete', 'approve', 'receipt', 'acknowledgement'] },
+  { id: 'mc', label: 'MC Management', actions: ['view', 'create', 'edit', 'delete', 'approve', 'renewal', 'checklist', 'view_record', 'history', 'receipt', 'acknowledgement'] },
+  { id: 'mcom', label: 'M.Com Management', actions: ['view', 'create', 'edit', 'delete', 'approve', 'renewal', 'view_record', 'history', 'acknowledgement'] },
+  { id: 'cfiles', label: 'C Files', actions: ['view', 'create', 'edit', 'delete', 'transfer', 'close'] },
+  { id: 'complains', label: 'Complaints/Issues', actions: ['view', 'create', 'edit', 'delete', 'transfer', 'close'] },
+  { id: 'discussion', label: 'Discussions', actions: ['view', 'create', 'edit', 'delete'] },
+  { id: 'notifications', label: 'Notifications', actions: ['view'] },
+  { id: 'records', label: 'Records', actions: ['view'] },
+  { id: 'customer_history', label: 'Customer History', actions: ['view'] },
+  { id: 'reports', label: 'Report Generate', actions: ['view'] },
+  { id: 'users', label: 'User & Roles Admin', actions: ['view', 'create', 'edit', 'delete'] },
+  { id: 'profile', label: 'My Profile', actions: ['view', 'edit'] }
+];
+
+function RoleModalComponent({ isOpen, onClose, onSave, isSaving, formData, setFormData, editingRole }) {
+  if (!isOpen) return null;
+  function togglePermission(moduleId, actionId) {
+    setFormData(prev => {
+      const currentPerms = { ...(prev.permissions || {}) };
+      const moduleActions = currentPerms[moduleId] || [];
+      if (moduleActions.includes(actionId)) {
+        currentPerms[moduleId] = moduleActions.filter(a => a !== actionId);
+        if (currentPerms[moduleId].length === 0) delete currentPerms[moduleId];
+      } else {
+        currentPerms[moduleId] = [...moduleActions, actionId];
+      }
+      return { ...prev, permissions: currentPerms };
+    });
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 1050, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,.2)', animation: 'fadeSlideIn .2s ease' }}>
+        <div style={{ padding: '18px 22px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, background: '#fff', zIndex: 10 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>{editingRole ? 'Edit Role' : 'Create New Role'}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: theme.text3 }}>✕</button>
+        </div>
+        <div style={{ padding: '20px 22px' }}>
+          <Field label="Role Name *" value={formData.name} onChange={v => setFormData(p => ({ ...p, name: v }))} disabled={editingRole?.is_system} />
+          <div style={{ marginTop: 20, fontSize: 12, fontWeight: 700, color: theme.navy, textTransform: 'uppercase', letterSpacing: '.7px', marginBottom: 10 }}>Granular Module Permissions</div>
+          <div style={{ border: `1px solid ${theme.border}`, borderRadius: 8, overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 1050 }}>
+              <thead>
+                <tr style={{ background: '#f8fafc', borderBottom: `1px solid ${theme.border}` }}>
+                  <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 600, color: theme.text2 }}>Module</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.text2 }}>View</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.text2 }}>Create</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.text2 }}>Edit</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.text2 }}>Delete</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.text2 }}>Approve</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.blue }}>Transfer</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.green }}>Close</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: '#7c3aed' }}>Checklist</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.green }}>Renewal</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.blue }}>View Record</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.text2 }}>History</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.orange }}>Receipt</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: '#2563eb' }}>Acknowledgement</th>
+                </tr>
+              </thead>
+              <tbody>
+                {allModules.map(mod => {
+                  const modPerms = formData.permissions[mod.id] || [];
+                  return (
+                    <tr key={mod.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                      <td style={{ padding: '10px 12px', fontWeight: 500 }}>{mod.label}</td>
+                      {['view', 'create', 'edit', 'delete', 'approve', 'transfer', 'close', 'checklist', 'renewal', 'view_record', 'history', 'receipt', 'acknowledgement'].map(action => (
+                        <td key={action} style={{ padding: '10px 12px', textAlign: 'center' }}>
+                          {mod.actions.includes(action) ? (
+                            <input
+                              type="checkbox"
+                              checked={modPerms.includes(action)}
+                              onChange={() => togglePermission(mod.id, action)}
+                              style={{
+                                cursor: 'pointer',
+                                width: 16,
+                                height: 16,
+                                accentColor: action === 'transfer' ? theme.blue
+                                  : action === 'close' ? theme.green
+                                  : action === 'checklist' ? '#7c3aed'
+                                  : action === 'renewal' ? theme.green
+                                  : action === 'receipt' ? theme.orange
+                                  : action === 'acknowledgement' ? '#2563eb'
+                                  : undefined
+                              }}
+                            />
+                          ) : (<span style={{ color: '#d1d5db' }}>—</span>)}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div style={{ padding: '14px 22px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10, background: '#fafbfe', position: 'sticky', bottom: 0 }}>
+          <button style={btnOutline} onClick={onClose}>Cancel</button>
+          <button style={btnPrimary} onClick={onSave} disabled={isSaving}>{isSaving ? 'Saving…' : 'Save Role'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Roles & Permissions Tab ── */
 function SystemRolesTab({ rolesList, loadRoles }) {
   const [modalOpen, setModalOpen] = useState(false);
@@ -725,23 +833,6 @@ function SystemRolesTab({ rolesList, loadRoles }) {
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState(null);
   const confirm = useConfirmDialog();
-
-  const allModules = [
-    { id: 'dashboard', label: 'Dashboard', actions: ['view'] },
-    { id: 'registration', label: 'Registration Form', actions: ['view', 'create', 'edit', 'delete', 'approve'] },
-    { id: 'renewal_approval', label: 'Renewal Approvals', actions: ['view', 'approve'] },
-    { id: 'mc', label: 'MC Management', actions: ['view', 'create', 'edit', 'delete', 'approve', 'renewal', 'checklist', 'view_record', 'history', 'receipt'] },
-    { id: 'mcom', label: 'M.Com Management', actions: ['view', 'create', 'edit', 'delete', 'approve', 'renewal', 'view_record', 'history'] },
-    { id: 'cfiles', label: 'C Files', actions: ['view', 'create', 'edit', 'delete', 'transfer', 'close'] },
-    { id: 'complains', label: 'Complaints/Issues', actions: ['view', 'create', 'edit', 'delete', 'transfer', 'close'] },
-    { id: 'discussion', label: 'Discussions', actions: ['view', 'create', 'edit', 'delete'] },
-    { id: 'notifications', label: 'Notifications', actions: ['view'] },
-    { id: 'records', label: 'Records', actions: ['view'] },
-    { id: 'customer_history', label: 'Customer History', actions: ['view'] },
-    { id: 'reports', label: 'Report Generate', actions: ['view'] },
-    { id: 'users', label: 'User & Roles Admin', actions: ['view', 'create', 'edit', 'delete'] },
-    { id: 'profile', label: 'My Profile', actions: ['view', 'edit'] }
-  ];
 
   function showToast(msg, type = 'success') {
     setToast({ msg, type });
@@ -780,6 +871,7 @@ function SystemRolesTab({ rolesList, loadRoles }) {
       }
       setModalOpen(false);
       await loadRoles();
+      window.dispatchEvent(new Event('cma:roles-updated'));
     } catch (err) {
       showToast(err.message || 'Failed to save role', 'error');
     } finally {
@@ -798,21 +890,6 @@ function SystemRolesTab({ rolesList, loadRoles }) {
     } catch (err) {
       showToast(err.message || 'Failed to delete role', 'error');
     }
-  }
-
-  function togglePermission(moduleId, actionId) {
-    setFormData(prev => {
-      const currentPerms = { ...(prev.permissions || {}) };
-      const moduleActions = currentPerms[moduleId] || [];
-
-      if (moduleActions.includes(actionId)) {
-        currentPerms[moduleId] = moduleActions.filter(a => a !== actionId);
-        if (currentPerms[moduleId].length === 0) delete currentPerms[moduleId];
-      } else {
-        currentPerms[moduleId] = [...moduleActions, actionId];
-      }
-      return { ...prev, permissions: currentPerms };
-    });
   }
 
   return (
@@ -861,72 +938,7 @@ function SystemRolesTab({ rolesList, loadRoles }) {
         </div>
       </div>
 
-      {modalOpen && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-          <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 1000, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,.2)' }}>
-            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, background: '#fff', zIndex: 10 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>{editingRole ? 'Edit Role' : 'Create New Role'}</div>
-              <button onClick={() => setModalOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: theme.text3 }}>✕</button>
-            </div>
-            <div style={{ padding: '20px 22px' }}>
-              <Field label="Role Name *" value={formData.name} onChange={v => setFormData(p => ({ ...p, name: v }))} disabled={editingRole?.is_system} />
-
-              <div style={{ marginTop: 20, fontSize: 12, fontWeight: 700, color: theme.navy, textTransform: 'uppercase', letterSpacing: '.7px', marginBottom: 10 }}>Granular Module Permissions</div>
-
-              <div style={{ border: `1px solid ${theme.border}`, borderRadius: 8, overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 1000 }}>
-                  <thead>
-                    <tr style={{ background: '#f8fafc', borderBottom: `1px solid ${theme.border}` }}>
-                      <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 600, color: theme.text2 }}>Module</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.text2 }}>View</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.text2 }}>Create</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.text2 }}>Edit</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.text2 }}>Delete</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.text2 }}>Approve</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.blue }}>Transfer</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.green }}>Close</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: '#7c3aed' }}>Checklist</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.green }}>Renewal</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.blue }}>View Record</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.text2 }}>History</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: theme.orange }}>Receipt</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {allModules.map(mod => {
-                      const modPerms = formData.permissions[mod.id] || [];
-                      return (
-                        <tr key={mod.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
-                          <td style={{ padding: '10px 12px', fontWeight: 500 }}>{mod.label}</td>
-                          {['view', 'create', 'edit', 'delete', 'approve', 'transfer', 'close', 'checklist', 'renewal', 'view_record', 'history', 'receipt'].map(action => (
-                            <td key={action} style={{ padding: '10px 12px', textAlign: 'center' }}>
-                              {mod.actions.includes(action) ? (
-                                <input
-                                  type="checkbox"
-                                  checked={modPerms.includes(action)}
-                                  onChange={() => togglePermission(mod.id, action)}
-                                  style={{ cursor: 'pointer', width: 16, height: 16, accentColor: action === 'transfer' ? theme.blue : action === 'close' ? theme.green : action === 'checklist' ? '#7c3aed' : action === 'renewal' ? theme.green : undefined }}
-                                />
-                              ) : (
-                                <span style={{ color: '#d1d5db' }}>—</span>
-                              )}
-                            </td>
-                          ))}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-            </div>
-            <div style={{ padding: '14px 22px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10, background: '#fafbfe', position: 'sticky', bottom: 0 }}>
-              <button style={btnOutline} onClick={() => setModalOpen(false)}>Cancel</button>
-              <button style={btnPrimary} onClick={handleSave} disabled={isSaving}>{isSaving ? 'Saving…' : 'Save Role'}</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <RoleModalComponent isOpen={modalOpen} onClose={() => setModalOpen(false)} onSave={handleSave} isSaving={isSaving} formData={formData} setFormData={setFormData} editingRole={editingRole} />
       {toast && (
         <div style={{ position: 'fixed', bottom: 22, right: 22, zIndex: 9999, background: '#fff', borderLeft: `4px solid ${toast.type === 'error' ? theme.red : theme.green}`, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 8px 30px rgba(0,0,0,.12)', minWidth: 260 }}>
           <i className={`fas fa-${toast.type === 'error' ? 'times-circle' : 'check-circle'}`} style={{ color: toast.type === 'error' ? theme.red : theme.green, fontSize: 16 }} />
@@ -963,6 +975,10 @@ function UserAdmin({ currentUser, onUserUpdated }) {
   const [viewerImage, setViewerImage] = useState(null);
   const [viewingUser, setViewingUser] = useState(null);
 
+  const [quickRoleModalOpen, setQuickRoleModalOpen] = useState(false);
+  const [quickRoleFormData, setQuickRoleFormData] = useState({ name: '', permissions: {} });
+  const [isSavingQuickRole, setIsSavingQuickRole] = useState(false);
+
   const triggerRefresh = useCallback(() => setRefreshTick(t => t + 1), []);
   useAutoRefresh(triggerRefresh, 30000);
 
@@ -986,6 +1002,22 @@ function UserAdmin({ currentUser, onUserUpdated }) {
       setRolesList(rs || []);
     } catch (err) {
       console.error('Failed to load roles', err);
+    }
+  }
+
+  async function handleSaveQuickRole() {
+    setIsSavingQuickRole(true);
+    try {
+      if (!quickRoleFormData.name.trim()) return showToast('Role name is required.', 'error');
+      await createRole(quickRoleFormData);
+      showToast('Role created successfully.');
+      setQuickRoleModalOpen(false);
+      setFormData(prev => ({ ...prev, role: quickRoleFormData.name.trim() }));
+      await loadRoles();
+    } catch (err) {
+      showToast(err.message || 'Failed to save role', 'error');
+    } finally {
+      setIsSavingQuickRole(false);
     }
   }
 
@@ -1443,9 +1475,30 @@ function UserAdmin({ currentUser, onUserUpdated }) {
                   onChange={v => setFormData(p => ({ ...p, department: v }))}
                   options={['CCU', 'Technical', 'Legal', 'IT / System', 'Administration', 'Other']} />
                 <Field label="Job Role (Designation)" value={formData.designation} placeholder="e.g. Legal Officer" onChange={v => setFormData(p => ({ ...p, designation: v }))} />
-                <SelectField label="System Access Role *" value={formData.role}
-                  onChange={v => setFormData(p => ({ ...p, role: v }))}
-                  options={rolesList.map(r => r.name)} />
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: theme.text2, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 6 }}>System Access Role *</label>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <select value={formData.role ?? ''} onChange={e => {
+                        if (e.target.value === '__CREATE_NEW__') {
+                           setQuickRoleFormData({ name: '', permissions: {} });
+                           setQuickRoleModalOpen(true);
+                        } else {
+                           setFormData(p => ({ ...p, role: e.target.value }));
+                        }
+                      }}
+                      style={{ flex: 1, padding: '9px 12px', border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 13, color: theme.text, background: '#fff', outline: 'none', appearance: 'none', backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235a6478' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 12px center', paddingRight: 36 }}>
+                      {rolesList.map(r => <option key={r.id} value={r.name}>{r.name}</option>)}
+                      <option disabled>──────────</option>
+                      <option value="__CREATE_NEW__">+ Create New Role...</option>
+                    </select>
+                    <button type="button" onClick={() => {
+                        setQuickRoleFormData({ name: '', permissions: {} });
+                        setQuickRoleModalOpen(true);
+                      }} style={{ ...btnOutline, padding: '0 12px', height: 38 }} title="Create New Role">
+                      <i className="fas fa-plus" />
+                    </button>
+                  </div>
+                </div>
                 <Field label="Email" value={formData.email} type="email" placeholder="e.g. john@example.com" onChange={v => setFormData(p => ({ ...p, email: v }))} />
               </div>
 
@@ -1471,6 +1524,8 @@ function UserAdmin({ currentUser, onUserUpdated }) {
           </div>
         </div>
       )}
+
+      <RoleModalComponent isOpen={quickRoleModalOpen} onClose={() => setQuickRoleModalOpen(false)} onSave={handleSaveQuickRole} isSaving={isSavingQuickRole} formData={quickRoleFormData} setFormData={setQuickRoleFormData} editingRole={null} />
 
       {/* ── Image Viewer Modal ── */}
       {viewerImage && (

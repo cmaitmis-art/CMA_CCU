@@ -683,9 +683,6 @@ function FormModal({ isOpen, onClose, onSave, initialData = null }) {
 function ViewModal({ isOpen, onClose, record = null, onEdit, onDelete }) {
   if (!isOpen || !record) return null;
 
-  const daysElapsed = calculateDaysElapsed(record.date);
-  const isPending = isOverduePending(record);
-
   return (
     <div style={overlayStyle} onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div style={{ ...modalStyle, maxWidth: 680, display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
@@ -713,7 +710,7 @@ function ViewModal({ isOpen, onClose, record = null, onEdit, onDelete }) {
               {record.status}
             </span>
           } />
-          <ViewRow label="Date" value={`${formatDisplayDate(record.date)}${daysElapsed !== null ? ` (${daysElapsed} days elapsed${isPending ? ' — PENDING' : ''})` : ''}`} />
+          <ViewRow label="Date" value={formatDisplayDate(record.date)} />
           <ViewRow label="Category" value={record.category} />
           <ViewRow label="CCU File No" value={record.registered_ccu_file_no} />
 
@@ -737,8 +734,8 @@ function ViewModal({ isOpen, onClose, record = null, onEdit, onDelete }) {
           ) : 'No document attached'} />
 
           <div style={{ fontSize: 12, fontWeight: 700, color: theme.navy, textTransform: 'uppercase', letterSpacing: '1px', borderBottom: `1px solid ${theme.border}`, paddingBottom: 6, marginBottom: 12, marginTop: 20 }}>Audit</div>
-          <ViewRow label="Created At" value={record.created_at} />
-          <ViewRow label="Updated At" value={record.updated_at} />
+          <ViewRow label="Created At" value={record.created_at ? `${formatDisplayDate(record.created_at)} (By: ${record.created_by || 'System'})` : '-'} />
+          <ViewRow label="Updated At" value={record.updated_at ? `${formatDisplayDate(record.updated_at)} (By: ${record.updated_by || record.modified_by || 'System'})` : '-'} />
         </div>
 
         <div style={{ padding: '14px 22px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
@@ -830,6 +827,7 @@ export default function CFiles({ currentUser }) {
 
   const [overdueList, setOverdueList] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
+  const [summaryStats, setSummaryStats] = useState(null);
   const [toast, setToast] = useState(null);
   const [showFormModal, setShowFormModal] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
@@ -851,7 +849,7 @@ export default function CFiles({ currentUser }) {
   async function load() {
     setLoading(true);
     try {
-      const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3001/api';
+      const API_BASE = (import.meta.env.VITE_API_URL || '/api').trim();
       const params = new URLSearchParams({
         limit: showOnlyPending ? 999999 : pageSize,
         page: showOnlyPending ? 1 : page,
@@ -871,6 +869,16 @@ export default function CFiles({ currentUser }) {
       const data = await r.json();
       setCfiles(data?.rows ?? []);
       setTotalCount(data?.total ?? 0);
+
+      try {
+        const sumRes = await fetch(`${API_BASE}/cfiles/stats/summary`);
+        if (sumRes.ok) {
+          const sumData = await sumRes.json();
+          setSummaryStats(sumData);
+        }
+      } catch (e) {
+        // Non-critical, fallback to page stats
+      }
     } catch (err) {
       showToast('Failed to load C-Files', 'error');
     } finally {
@@ -1230,14 +1238,28 @@ export default function CFiles({ currentUser }) {
   }
 
   const stats = useMemo(() => {
-    const pending = overdueList.length;
+    if (summaryStats) {
+      return {
+        total: summaryStats.total ?? totalCount,
+        pending: summaryStats.pending ?? 0,
+        new: summaryStats.new ?? 0,
+        totalCategories: summaryStats.totalCategories ?? 0,
+        overdue: summaryStats.overdue ?? overdueList.length,
+      };
+    }
     const categories = new Set(cfiles.map((r) => r.category).filter(Boolean));
     const byStatus = {};
     cfiles.forEach((r) => {
       byStatus[r.status] = (byStatus[r.status] || 0) + 1;
     });
-    return { pending, totalCategories: categories.size, byStatus };
-  }, [cfiles]);
+    return {
+      total: totalCount || cfiles.length,
+      pending: byStatus['Pending'] || 0,
+      new: byStatus['New'] || 0,
+      totalCategories: categories.size,
+      overdue: overdueList.length,
+    };
+  }, [summaryStats, totalCount, cfiles, overdueList]);
 
   return (
     <div style={{ padding: 24, fontFamily: "var(--font-sans)", background: theme.bg, minHeight: '100vh' }}>
@@ -1275,9 +1297,9 @@ export default function CFiles({ currentUser }) {
               title="Pending reminders - files pending for more than 15 days"
             >
               <i className="fas fa-bell" /> Pending
-              {stats.pending > 0 && (
-                <span style={{ position: 'absolute', top: -6, right: -6, background: '#2563eb', color: '#fff', borderRadius: 999, fontSize: 10, fontWeight: 700, minWidth: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px' }}>
-                  {stats.pending}
+              {stats.overdue > 0 && (
+                <span style={{ position: 'absolute', top: -6, right: -6, background: '#ef4444', color: '#fff', borderRadius: 999, fontSize: 10, fontWeight: 700, minWidth: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px' }}>
+                  {stats.overdue}
                 </span>
               )}
             </button>
@@ -1307,7 +1329,7 @@ export default function CFiles({ currentUser }) {
                     {showOnlyPending ? 'Clear Table Filter' : 'Filter & View All in Table'}
                   </button>
                 </div>
-                {stats.pending === 0 ? (
+                {stats.overdue === 0 ? (
                   <div style={{ padding: 14, fontSize: 12, color: theme.text3 }}>No pending items.</div>
                 ) : overdueList.map((cf) => {
                   const days = calculateDaysElapsed(cf.date);
@@ -1351,23 +1373,44 @@ export default function CFiles({ currentUser }) {
       {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 14, marginBottom: 16 }}>
         {[
-          { label: 'TOTAL', value: totalCount, icon: 'fa-folder' },
-          { label: 'PENDING', value: stats.pending, icon: 'fa-exclamation', color: theme.red },
-          { label: 'CATEGORIES', value: stats.totalCategories, icon: 'fa-tags' },
-          { label: 'NEW', value: stats.byStatus['New'] || 0, icon: 'fa-star', color: '#2563eb' },
-        ].map(({ label, value, icon, color }) => (
-          <div key={label} style={{ background: theme.card, borderRadius: 12, padding: 18, border: `1px solid ${theme.border}` }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ fontSize: 24, color: color || theme.blue, opacity: 0.7 }}>
-                <i className={`fas ${icon}`} />
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: theme.text3, textTransform: 'uppercase', letterSpacing: '.8px', fontWeight: 500 }}>{label}</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: color || theme.text }}>{value}</div>
+          { label: 'TOTAL', value: stats.total, icon: 'fa-folder', color: theme.blue, filterValue: '' },
+          { label: 'PENDING', value: stats.pending, icon: 'fa-exclamation', color: theme.red, filterValue: 'Pending' },
+          { label: 'CATEGORIES', value: stats.totalCategories, icon: 'fa-tags', color: theme.text2, filterValue: 'ALL_CATS' },
+          { label: 'NEW', value: stats.new, icon: 'fa-star', color: '#2563eb', filterValue: 'New' },
+        ].map(({ label, value, icon, color, filterValue }) => {
+          const isActive = (filterValue !== '' && filterValue !== 'ALL_CATS' && statusFilter === filterValue) || (filterValue === '' && !statusFilter && !showOnlyPending);
+          return (
+            <div
+              key={label}
+              onClick={() => {
+                if (filterValue === 'ALL_CATS') return;
+                setShowOnlyPending(false);
+                setStatusFilter((prev) => (prev === filterValue ? '' : filterValue));
+              }}
+              style={{
+                background: theme.card,
+                borderRadius: 12,
+                padding: 18,
+                border: isActive ? `2px solid ${color || theme.blue}` : `1px solid ${theme.border}`,
+                cursor: filterValue === 'ALL_CATS' ? 'default' : 'pointer',
+                transition: 'box-shadow 0.15s, border 0.15s',
+                boxShadow: isActive ? `0 0 0 3px ${(color || theme.blue)}22` : 'none',
+              }}
+              onMouseEnter={(e) => { if (!isActive && filterValue !== 'ALL_CATS') e.currentTarget.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)'; }}
+              onMouseLeave={(e) => { if (!isActive && filterValue !== 'ALL_CATS') e.currentTarget.style.boxShadow = 'none'; }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ fontSize: 24, color: color || theme.blue, opacity: 0.7 }}>
+                  <i className={`fas ${icon}`} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: theme.text3, textTransform: 'uppercase', letterSpacing: '.8px', fontWeight: 500 }}>{label}</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: color || theme.text }}>{value}</div>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Table Card */}
@@ -1462,7 +1505,7 @@ export default function CFiles({ currentUser }) {
               <span>Showing <strong>{loading ? 0 : cfiles.length}</strong> of <strong>{totalCount}</strong></span>
             )}
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             {!viewAll && (
               <>
                 <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}
@@ -1476,7 +1519,7 @@ export default function CFiles({ currentUser }) {
             <button
               onClick={() => setViewAll(v => !v)}
               className="mc-btn-base"
-              style={viewAll ? { background: '#10b981', color: '#ffffff', border: 'none', padding: '5px 12px', fontSize: 12, marginRight: 8 } : { background: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1', padding: '5px 12px', fontSize: 12, marginRight: 8 }}
+              style={viewAll ? { background: '#10b981', color: '#ffffff', border: 'none', padding: '5px 12px', fontSize: 12 } : { background: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1', padding: '5px 12px', fontSize: 12 }}
               title="Toggle between showing all records and paginated view"
             >
               <i className={loading && viewAll ? 'fas fa-spinner fa-spin' : viewAll ? 'fas fa-check-circle' : 'fas fa-list'} style={{ marginRight: 5 }} />
@@ -1490,7 +1533,7 @@ export default function CFiles({ currentUser }) {
                 if (typeof setViewAll === 'function') setViewAll(next);
               }}
               className="mc-btn-base"
-              style={{ background: '#e0e7ff', color: '#4338ca', border: '1px solid #c7d2fe', padding: '5px 12px', fontSize: 12, marginLeft: 8 }}
+              style={{ background: '#e0e7ff', color: '#4338ca', border: '1px solid #c7d2fe', padding: '5px 12px', fontSize: 12 }}
             >
               {isZoomed ? (
                 <>

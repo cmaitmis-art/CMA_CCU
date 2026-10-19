@@ -139,6 +139,7 @@ export default function Complaints({ currentUser, onNavigate }) {
     return sessionStorage.getItem('cma_complaints_showPendingPanel') === 'true';
   });
   const [overdueList, setOverdueList] = useState([]);
+  const [summaryStats, setSummaryStats] = useState(null);
   // MC NO link popup state: { mcNo, x, y }
   const [mcLinkPopup, setMcLinkPopup] = useState(null);
   const confirm = useConfirmDialog();
@@ -173,7 +174,10 @@ export default function Complaints({ currentUser, onNavigate }) {
       if (statusFilter) params.append('status', statusFilter);
       if (yearFilter?.trim()) params.append('year', yearFilter.trim());
       if (monthFilter?.trim()) params.append('month', monthFilter.trim());
-      if (pendingOverdueFilter) params.append('status', 'Pending');
+      if (pendingOverdueFilter) {
+        params.append('exclude_closed', 'true');
+        params.append('pending_overdue_15', 'true');
+      }
       if (isDeptUser) params.append('department', isDeptUser);
 
       const r = await fetch(`${API_BASE}/complaints?${params.toString()}`);
@@ -188,6 +192,13 @@ export default function Complaints({ currentUser, onNavigate }) {
         setComplaints(rows);
         setTotalCount(data?.total ?? 0);
       }
+      try {
+        const sumRes = await fetch(`${API_BASE}/complaints/stats/summary`);
+        if (sumRes.ok) {
+          const sumData = await sumRes.json();
+          setSummaryStats(sumData);
+        }
+      } catch (e) { }
     } catch (err) {
       showToast('Failed to load Complaints', 'error');
     } finally {
@@ -231,7 +242,7 @@ export default function Complaints({ currentUser, onNavigate }) {
     async function loadOverdue() {
       try {
         const API_BASE = (import.meta.env.VITE_API_URL || '/api').trim();
-        const r = await fetch(`${API_BASE}/complaints?status=Pending&limit=999999`);
+        const r = await fetch(`${API_BASE}/complaints?exclude_closed=true&limit=999999`);
         const data = await r.json();
         const rows = data?.rows ?? data ?? [];
         setOverdueList(rows.filter(r => calculateDaysElapsed(r.received_ccu) > 15));
@@ -557,8 +568,24 @@ export default function Complaints({ currentUser, onNavigate }) {
   }
 
   const stats = useMemo(() => {
-    const pending = complaints.filter((r) => r.status === 'Pending' && calculateDaysElapsed(r.received_ccu) > 15).length;
-    const overdue = complaints.filter((r) => r.status === 'Pending' && calculateDaysElapsed(r.received_ccu) > 15).length;
+    if (summaryStats) {
+      return {
+        total: summaryStats.total ?? totalCount,
+        pending: summaryStats.pending ?? 0,
+        new: summaryStats.new ?? 0,
+        open: summaryStats.open ?? 0,
+        closed: summaryStats.closed ?? 0,
+        overdue: summaryStats.overdue ?? overdueList.length,
+        totalCategories: summaryStats.totalCategories ?? 0,
+        byStatus: {
+          'New': summaryStats.new ?? 0,
+          'Open': summaryStats.open ?? 0,
+          'Closed': summaryStats.closed ?? 0,
+        },
+      };
+    }
+    const pending = complaints.filter((r) => r.status !== 'Closed').length;
+    const overdue = complaints.filter((r) => r.status !== 'Closed' && calculateDaysElapsed(r.received_ccu) > 15).length;
     const closed = complaints.filter((r) => r.status === 'Closed').length;
     const replyDone = complaints.filter((r) => r.reply_marked).length;
     const categories = new Set(complaints.map((r) => r.category).filter(Boolean));
@@ -566,13 +593,22 @@ export default function Complaints({ currentUser, onNavigate }) {
     complaints.forEach((r) => {
       byStatus[r.status] = (byStatus[r.status] || 0) + 1;
     });
-    return { pending, overdue, closed, replyDone, totalCategories: categories.size, byStatus };
-  }, [complaints]);
+    return {
+      total: totalCount || complaints.length,
+      pending,
+      overdue,
+      closed,
+      replyDone,
+      totalCategories: categories.size,
+      new: byStatus['New'] || 0,
+      open: byStatus['Open'] || 0,
+    };
+  }, [summaryStats, totalCount, complaints, overdueList]);
 
   const pendingByCategory = useMemo(() => {
     if (!categoryFilter) return [];
     return complaints.filter(
-      (r) => r.category === categoryFilter && r.status === 'Pending' && calculateDaysElapsed(r.received_ccu) > 15
+      (r) => r.category === categoryFilter && r.status !== 'Closed' && calculateDaysElapsed(r.received_ccu) > 15
     );
   }, [complaints, categoryFilter]);
 
@@ -615,9 +651,9 @@ export default function Complaints({ currentUser, onNavigate }) {
               title="Pending reminders - complaints pending for more than 15 days"
             >
               <i className="fas fa-bell" /> Pending
-              {stats.pending > 0 && (
+              {stats.overdue > 0 && (
                 <span style={{ position: 'absolute', top: -6, right: -6, background: '#2563eb', color: '#fff', borderRadius: 999, fontSize: 10, fontWeight: 700, minWidth: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px' }}>
-                  {stats.pending}
+                  {stats.overdue}
                 </span>
               )}
             </button>
@@ -641,7 +677,7 @@ export default function Complaints({ currentUser, onNavigate }) {
                     {pendingOverdueFilter ? 'Clear Table Filter' : 'Filter & View All in Table'}
                   </button>
                 </div>
-                {stats.pending === 0 ? (
+                {stats.overdue === 0 ? (
                   <div style={{ padding: 14, fontSize: 12, color: theme.text3 }}>No pending items.</div>
                 ) : overdueList.map((cf) => {
                   const days = calculateDaysElapsed(cf.received_ccu);
@@ -687,23 +723,55 @@ export default function Complaints({ currentUser, onNavigate }) {
       {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 14, marginBottom: 16 }}>
         {[
-          { label: 'TOTAL', value: totalCount, icon: 'fa-folder' },
-          { label: 'PENDING', value: stats.pending, icon: 'fa-exclamation', color: theme.red },
-          { label: 'CATEGORIES', value: stats.totalCategories, icon: 'fa-tags' },
-          { label: 'NEW', value: stats.byStatus['New'] || 0, icon: 'fa-star', color: '#2563eb' },
-        ].map(({ label, value, icon, color }) => (
-          <div key={label} style={{ background: theme.card, borderRadius: 12, padding: 18, border: `1px solid ${theme.border}` }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ fontSize: 24, color: color || theme.blue, opacity: 0.7 }}>
-                <i className={`fas ${icon}`} />
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: theme.text3, textTransform: 'uppercase', letterSpacing: '.8px', fontWeight: 500 }}>{label}</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: color || theme.text }}>{value}</div>
+          { label: 'TOTAL', value: stats.total, icon: 'fa-folder', color: theme.blue, filterKey: 'TOTAL' },
+          { label: 'PENDING', value: stats.pending, icon: 'fa-exclamation', color: theme.red, filterKey: 'PENDING' },
+          { label: 'CATEGORIES', value: stats.totalCategories, icon: 'fa-tags', color: theme.text2, filterKey: 'ALL_CATS' },
+          { label: 'NEW', value: stats.new ?? (stats.byStatus && stats.byStatus['New']) ?? 0, icon: 'fa-star', color: '#2563eb', filterKey: 'NEW' },
+        ].map(({ label, value, icon, color, filterKey }) => {
+          const isActive =
+            (filterKey === 'TOTAL' && !statusFilter && !pendingOverdueFilter) ||
+            (filterKey === 'PENDING' && pendingOverdueFilter) ||
+            (filterKey === 'NEW' && statusFilter === 'New');
+          return (
+            <div
+              key={label}
+              onClick={() => {
+                if (filterKey === 'ALL_CATS') return;
+                if (filterKey === 'TOTAL') {
+                  setPendingOverdueFilter(false);
+                  setStatusFilter('');
+                } else if (filterKey === 'PENDING') {
+                  setStatusFilter('');
+                  setPendingOverdueFilter((prev) => !prev);
+                } else if (filterKey === 'NEW') {
+                  setPendingOverdueFilter(false);
+                  setStatusFilter((prev) => (prev === 'New' ? '' : 'New'));
+                }
+              }}
+              style={{
+                background: theme.card,
+                borderRadius: 12,
+                padding: 18,
+                border: isActive ? `2px solid ${color || theme.blue}` : `1px solid ${theme.border}`,
+                cursor: filterKey === 'ALL_CATS' ? 'default' : 'pointer',
+                transition: 'box-shadow 0.15s, border 0.15s',
+                boxShadow: isActive ? `0 0 0 3px ${(color || theme.blue)}22` : 'none',
+              }}
+              onMouseEnter={(e) => { if (!isActive && filterKey !== 'ALL_CATS') e.currentTarget.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)'; }}
+              onMouseLeave={(e) => { if (!isActive && filterKey !== 'ALL_CATS') e.currentTarget.style.boxShadow = 'none'; }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ fontSize: 24, color: color || theme.blue, opacity: 0.7 }}>
+                  <i className={`fas ${icon}`} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: theme.text3, textTransform: 'uppercase', letterSpacing: '.8px', fontWeight: 500 }}>{label}</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: color || theme.text }}>{value}</div>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Pending by Category — only shown when a category is selected */}
@@ -868,7 +936,7 @@ export default function Complaints({ currentUser, onNavigate }) {
             <div style={{ fontSize: 12, color: theme.text2 }}>
               Showing <strong>{loading ? 0 : complaints.length}</strong> of <strong>{totalCount}</strong>
             </div>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               {!viewAll && (
                 <>
                   <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}
@@ -881,7 +949,7 @@ export default function Complaints({ currentUser, onNavigate }) {
               <button
                 onClick={() => setViewAll(v => !v)}
                 className="mc-btn-base"
-                style={viewAll ? { background: '#10b981', color: '#ffffff', border: 'none', padding: '5px 12px', fontSize: 12, borderRadius: 6, marginLeft: 8 } : { background: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1', padding: '5px 12px', fontSize: 12, borderRadius: 6, marginLeft: 8 }}
+                style={viewAll ? { background: '#10b981', color: '#ffffff', border: 'none', padding: '5px 12px', fontSize: 12, borderRadius: 6 } : { background: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1', padding: '5px 12px', fontSize: 12, borderRadius: 6 }}
                 title="Toggle between showing all records and paginated view"
               >
                 <i className={loading && viewAll ? 'fas fa-spinner fa-spin' : viewAll ? 'fas fa-check-circle' : 'fas fa-list'} style={{ marginRight: 5 }} />
@@ -894,7 +962,7 @@ export default function Complaints({ currentUser, onNavigate }) {
                   setViewAll(next);
                 }}
                 className="mc-btn-base"
-                style={{ background: '#e0e7ff', color: '#4338ca', border: '1px solid #c7d2fe', padding: '5px 12px', fontSize: 12, borderRadius: 6, marginLeft: 8 }}
+                style={{ background: '#e0e7ff', color: '#4338ca', border: '1px solid #c7d2fe', padding: '5px 12px', fontSize: 12, borderRadius: 6 }}
               >
                 {isZoomed ? (
                   <><i className="fas fa-compress" style={{ marginRight: 6 }} /> Exit Zoom</>

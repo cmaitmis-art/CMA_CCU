@@ -117,16 +117,9 @@ export default function Profile({ currentUser, onUserUpdated }) {
   const [allActivitiesLoading, setAllActivitiesLoading] = useState(false);
 
   const profile = useMemo(() => {
-    const roleKey = String(currentUser?.role || '').trim().toUpperCase();
-    const roleLabel = roleKey === 'ADMIN'
-      ? 'System Administrator'
-      : roleKey === 'AGM'
-        ? 'Assistant General Manager'
-        : roleKey === 'MA'
-          ? 'Management Assistant'
-          : currentUser?.role || 'User';
-    const username = currentUser?.username || 'admin.user';
-
+    const roleKey = String(currentUser?.role || '').toUpperCase();
+    const roleLabel = currentUser?.role || 'Administrator';
+    const username = currentUser?.username || 'admin';
     return {
       avatarText: currentUser?.avatar || 'AD',
       fullName: currentUser?.name || 'Admin User',
@@ -136,14 +129,14 @@ export default function Profile({ currentUser, onUserUpdated }) {
         { kind: roleKey === 'ADMIN' ? 'navy' : 'blue', label: currentUser?.role || 'Admin' },
       ],
       email: currentUser?.email || `${username}@cma.gov.lk`,
-      phone: roleKey === 'ADMIN' ? '+94 11 234 5678' : '+94 11 876 5432',
+      phone: currentUser?.phone || (roleKey === 'ADMIN' ? '+94 11 234 5678' : '+94 11 876 5432'),
       role: currentUser?.designation || roleLabel,
       department: currentUser?.department || (
                   roleKey === 'ADMIN' ? 'CMA — IT / System Division' :
                   roleKey === 'TECHNICAL' ? 'CMA — Technical Division' :
                   roleKey === 'LEGAL' ? 'CMA — Legal Division' :
                   'CMA — CCU Division'),
-      year: '2026',
+      year: currentUser?.year || '2026',
       timeline: timelineItems.length > 0 ? timelineItems : [
         { time: 'Active', text: 'No recent activity logs recorded for your account yet.' }
       ],
@@ -161,6 +154,10 @@ export default function Profile({ currentUser, onUserUpdated }) {
       email: currentUser?.email || '',
       username: currentUser?.username || '',
       password: '',
+      phone: currentUser?.phone || '',
+      designation: currentUser?.designation || '',
+      department: currentUser?.department || '',
+      year: currentUser?.year || '',
     });
     setEditAvatarFile(null);
     setEditAvatarPreview(currentUser?.avatar_url || null);
@@ -186,8 +183,8 @@ export default function Profile({ currentUser, onUserUpdated }) {
     if (!userId) return;
     setSavingProfile(true);
     try {
-      const { name, email, username, password } = editProfileForm;
-      const body = { name, email, username };
+      const { name, email, username, password, phone, designation, department, year } = editProfileForm;
+      const body = { name, email, username, phone, designation, department, year };
       if (password) body.password = password;
 
       let updatedUser = { ...currentUser };
@@ -829,19 +826,35 @@ export default function Profile({ currentUser, onUserUpdated }) {
                   )}
                   <tr>
                     <td style={{ color: theme.text3, padding: '7px 0' }}>Phone</td>
-                    <td style={{ fontWeight: 600 }}>{profile.phone}</td>
+                    <td style={{ fontWeight: 600 }}>
+                      {isEditingProfile ? (
+                        <input className="form-control" type="text" value={editProfileForm.phone} onChange={e => setEditProfileForm({ ...editProfileForm, phone: e.target.value })} />
+                      ) : profile.phone}
+                    </td>
                   </tr>
                   <tr>
                     <td style={{ color: theme.text3, padding: '7px 0' }}>Role</td>
-                    <td style={{ fontWeight: 600 }}>{profile.role}</td>
+                    <td style={{ fontWeight: 600 }}>
+                      {isEditingProfile ? (
+                        <input className="form-control" type="text" value={editProfileForm.designation} onChange={e => setEditProfileForm({ ...editProfileForm, designation: e.target.value })} />
+                      ) : profile.role}
+                    </td>
                   </tr>
                   <tr>
                     <td style={{ color: theme.text3, padding: '7px 0' }}>Department</td>
-                    <td style={{ fontWeight: 600 }}>{profile.department}</td>
+                    <td style={{ fontWeight: 600 }}>
+                      {isEditingProfile ? (
+                        <input className="form-control" type="text" value={editProfileForm.department} onChange={e => setEditProfileForm({ ...editProfileForm, department: e.target.value })} />
+                      ) : profile.department}
+                    </td>
                   </tr>
                   <tr>
                     <td style={{ color: theme.text3, padding: '7px 0' }}>Year</td>
-                    <td style={{ fontWeight: 600 }}>{profile.year}</td>
+                    <td style={{ fontWeight: 600 }}>
+                      {isEditingProfile ? (
+                        <input className="form-control" type="text" value={editProfileForm.year} onChange={e => setEditProfileForm({ ...editProfileForm, year: e.target.value })} />
+                      ) : profile.year}
+                    </td>
                   </tr>
                 </tbody>
               </table>

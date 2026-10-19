@@ -22,6 +22,10 @@ function extractUserAndRole(fullStr) {
   };
 }
 
+function normalizeName(v) {
+  return String(v || '').toLowerCase().replace(/[.\s]+/g, ' ').trim();
+}
+
 // Get proper initials from a name string (up to 2 letters)
 function getInitials(name) {
   if (!name) return '—';
@@ -268,15 +272,16 @@ export default function ActivityLogs({ onClose }) {
   const [refreshTick, setRefreshTick] = useState(0);
 
   const [allUsers, setAllUsers] = useState([]);
+  const hasLoadedRef = React.useRef(false);
 
   useEffect(() => {
     const fetchLogsAndUsers = async () => {
       try {
-        setIsLoading(true);
+        if (!hasLoadedRef.current) setIsLoading(true);
         const API_BASE = (import.meta.env.VITE_API_URL || '/api').trim();
 
         const [resLogs, resUsers] = await Promise.all([
-          fetch(`${API_BASE}/daily-activities/user-timeline?limit=1000`),
+          fetch(`${API_BASE}/daily-activities/user-timeline?limit=500`),
           fetch(`${API_BASE}/users`)
         ]);
 
@@ -300,6 +305,7 @@ export default function ActivityLogs({ onClose }) {
       } catch (err) {
         console.error('Failed to fetch:', err);
       } finally {
+        hasLoadedRef.current = true;
         setIsLoading(false);
       }
     };
@@ -317,21 +323,34 @@ export default function ActivityLogs({ onClose }) {
   const triggerRefresh = useCallback(() => setRefreshTick(t => t + 1), []);
   useAutoRefresh(triggerRefresh, 30000);
 
+  // Only users who have a login account appear in the dropdown — deduplicated
+  // by name (case/space-insensitive). New users show up automatically.
   const uniqueUsers = useMemo(() => {
-    const usersSet = new Set(logsData.map((log) => log.user));
-    allUsers.forEach(u => {
-      if (u.name) {
-        const role = (u.role || '').toLowerCase();
-        usersSet.add(`${u.name}${role ? ` (${role})` : ''}`);
-      }
+    const seen = new Map();
+    (Array.isArray(allUsers) ? allUsers : []).forEach(u => {
+      const name = String(u?.name || u?.username || '').trim().replace(/\s+/g, ' ');
+      if (!name) return;
+      const key = normalizeName(name);
+      if (!seen.has(key)) seen.set(key, name);
     });
-    return ['All Users', ...Array.from(usersSet)];
-  }, [logsData, allUsers]);
+    const names = Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+    return ['All Users', ...names];
+  }, [allUsers]);
+
+  // Matches a log entry's user (e.g. "Ms. X (CCU)") against a selected login name
+  const logMatchesUser = useCallback((logUser, selected) => {
+    const base = normalizeName(extractUserAndRole(logUser).name);
+    const sel = normalizeName(selected);
+    if (!base || !sel) return false;
+    if (base === sel) return true;
+    const acct = (Array.isArray(allUsers) ? allUsers : []).find(u => normalizeName(u?.name) === sel);
+    return !!(acct?.username && base === normalizeName(acct.username));
+  }, [allUsers]);
 
   const filteredLogs = useMemo(() => {
     let logs = [...logsData];
     if (userFilter !== 'All Users') {
-      logs = logs.filter((log) => log.user === userFilter);
+      logs = logs.filter((log) => logMatchesUser(log.user, userFilter));
     }
     if (actionFilter !== 'All') {
       logs = logs.filter(log => {
@@ -358,12 +377,12 @@ export default function ActivityLogs({ onClose }) {
       }
     }
     return logs.sort((a, b) => new Date(b.date) - new Date(a.date));
-  }, [dateFilter, userFilter, actionFilter, searchTerm, logsData]);
+  }, [dateFilter, userFilter, actionFilter, searchTerm, logsData, logMatchesUser]);
 
   const monthlyStats = useMemo(() => {
     const stats = {};
     logsData.forEach((log) => {
-      if (userFilter !== 'All Users' && log.user !== userFilter) return;
+      if (userFilter !== 'All Users' && !logMatchesUser(log.user, userFilter)) return;
       const date = new Date(log.date);
       const monthYear = date.toLocaleString('default', { month: 'short', year: 'numeric' });
       stats[monthYear] = (stats[monthYear] || 0) + 1;
@@ -371,14 +390,14 @@ export default function ActivityLogs({ onClose }) {
     return Object.entries(stats)
       .map(([label, count]) => ({ label, count }))
       .sort((a, b) => new Date(`1 ${a.label}`) - new Date(`1 ${b.label}`));
-  }, [userFilter, logsData]);
+  }, [userFilter, logsData, logMatchesUser]);
 
   const maxCount = Math.max(...monthlyStats.map((s) => s.count), 1);
 
   const downloadReport = () => {
     const printWindow = window.open('', '_blank', 'width=900,height=1000');
     if (!printWindow) return alert('Please allow popups to download the report.');
-    
+
     // Group logs by user
     const grouped = {};
     filteredLogs.forEach(log => {
@@ -389,7 +408,7 @@ export default function ActivityLogs({ onClose }) {
     });
 
     const d = new Date();
-    
+
     let html = `
       <!DOCTYPE html>
       <html>
@@ -456,7 +475,7 @@ export default function ActivityLogs({ onClose }) {
     }
 
     html += `</body></html>`;
-    
+
     printWindow.document.write(html);
     printWindow.document.close();
     printWindow.focus();

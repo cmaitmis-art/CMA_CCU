@@ -37,7 +37,7 @@ export function buildMcChecklistAndReceiptPrintHtml(record = {}, checks = {}, no
   <style>
     @page { size: A4; margin: 0 !important; }
     html, body { margin: 0; padding: 0; background: #fff; color: #111; font-family: 'Times New Roman', 'Abhaya Libre', 'Noto Serif Sinhala', 'Iskoola Pota', Times, serif; }
-    body { padding: 12mm; }
+    body { padding: 8mm 15mm 8mm 1.2in; }
     .page { max-width: 210mm; margin: 0 auto; }
   </style>
 </head>

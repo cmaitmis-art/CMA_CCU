@@ -95,17 +95,29 @@ router.post('/', async (req, res) => {
     try {
       const { ManagementCorporation, McomRecord } = db.models;
 
-      if (mc?.id) {
+      if (mc?.id || mc?.planNo || mc?.name) {
         if (mc.type === 'M.Com' && McomRecord) {
-          const mcom = await McomRecord.findByPk(mc.id);
+          let mcom = mc?.id ? await McomRecord.findByPk(mc.id) : null;
+          if (!mcom && mc?.planNo) mcom = await McomRecord.findOne({ where: { plan_no: mc.planNo } });
+          if (!mcom && mc?.name) mcom = await McomRecord.findOne({ where: { mc_name: mc.name } });
           if (mcom) {
+            if (renewal && renewal.mc_id !== mcom.id) {
+              renewal.mc_id = mcom.id;
+              await renewal.save();
+            }
             mcom.renewal_payment_status = 'Pending Approval';
             mcom.status = 'Pending';
             await mcom.save();
           }
         } else if (ManagementCorporation) {
-          const mcRec = await ManagementCorporation.findByPk(mc.id);
+          let mcRec = mc?.id ? await ManagementCorporation.findByPk(mc.id) : null;
+          if (!mcRec && mc?.planNo) mcRec = await ManagementCorporation.findOne({ where: { plan_no: mc.planNo } });
+          if (!mcRec && mc?.name) mcRec = await ManagementCorporation.findOne({ where: { management_corporation_name: mc.name } });
           if (mcRec) {
+            if (renewal && renewal.mc_id !== mcRec.id) {
+              renewal.mc_id = mcRec.id;
+              await renewal.save();
+            }
             mcRec.renewal_payment_status = 'Pending Approval';
             mcRec.status = 'Pending';
             await mcRec.save();
@@ -140,92 +152,111 @@ router.post('/:refNo/approve', async (req, res) => {
 
     // Auto-update MC or MCom
     try {
-      if (renewal.mc_id) {
-        const todayStr = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
-        if (renewal.mc_type === 'M.Com' && McomRecord) {
-          const mcom = await McomRecord.findByPk(renewal.mc_id);
-          if (mcom) {
-            const isActive = maxYear >= new Date().getFullYear();
-            const targetStatus = isActive ? 'Active' : 'Non Active';
+      const todayStr = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+      const currentYear = new Date().getFullYear();
 
-            let combinedYears = years.join(', ');
-            if (mcom.renewal_paid_years) {
-              const existing = mcom.renewal_paid_years.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y));
-              const current = years ? years.map(y => parseInt(y)) : [];
-              const merged = Array.from(new Set([...existing, ...current])).sort((a, b) => a - b);
-              combinedYears = merged.join(', ');
-            }
-
-            mcom.renewal_paid = true;
-            mcom.renewal_paid_year = maxYear; // Integer
-            mcom.renewal_paid_years = combinedYears;
-            mcom.renewal_paid_amount = renewal.amount;
-            mcom.renewal_paid_date = todayStr;
-            mcom.renewal_receipt_no = renewal.ref_no;
-            mcom.renewal_period = maxYear.toString();
-            mcom.renewal_status = targetStatus;
-            mcom.renewal_date_vise = targetStatus;
-            mcom.active_non_active = targetStatus;
-            mcom.status = targetStatus;
-            mcom.renewal_payment_status = 'Approved';
-            mcom.acknowledgement_no = `ACK/MCOM/${mcom.new_file_no || mcom.file_no || mcom.id}/${maxYear}`;
-            mcom.acknowledgement_date = todayStr;
-            await mcom.save();
-
-            // -- CUSTOMER HISTORY LOG --
-            try {
-              await db.models.CustomerHistory.create({
-                customer_no: mcom.file_no || mcom.new_file_no || mcom.id.toString(),
-                mc_type: 'MCOM',
-                action_type: 'Renewal Approved',
-                description: `Renewal for Rs. ${renewal.amount} approved for years: ${years.join(', ')}`,
-                year: maxYear,
-                file_path: null,
-                action_by: req.body.actionBy || 'System'
-              });
-            } catch (histErr) {
-              console.error('Failed to log CustomerHistory for MCOM renewal:', histErr);
-            }
+      if (renewal.mc_type === 'M.Com' && McomRecord) {
+        let mcom = renewal.mc_id ? await McomRecord.findByPk(renewal.mc_id) : null;
+        if (!mcom && renewal.plan_no) mcom = await McomRecord.findOne({ where: { plan_no: renewal.plan_no } });
+        if (!mcom && renewal.mc_name) mcom = await McomRecord.findOne({ where: { mc_name: renewal.mc_name } });
+        if (mcom) {
+          if (renewal.mc_id !== mcom.id) {
+            renewal.mc_id = mcom.id;
+            await renewal.save();
           }
-        } else if (ManagementCorporation) {
-          const mc = await ManagementCorporation.findByPk(renewal.mc_id);
-          if (mc) {
-            let combinedYears = years.join(', ');
-            if (mc.renewal_paid_years) {
-              const existing = mc.renewal_paid_years.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y));
-              const current = years ? years.map(y => parseInt(y)) : [];
-              const merged = Array.from(new Set([...existing, ...current])).sort((a, b) => a - b);
-              combinedYears = merged.join(', ');
-            }
 
-            mc.renewal_paid = true;
-            mc.renewal_paid_year = maxYear; // Integer
-            mc.renewal_paid_years = combinedYears;
-            mc.renewal_paid_amount = renewal.amount;
-            mc.renewal_paid_date = todayStr;
-            mc.renewal_receipt_no = renewal.ref_no;
-            mc.renewal_period = maxYear.toString();
-            mc.renewal_payment_status = 'Approved';
-            mc.renewal_date_vise = 'Active';
-            mc.status = 'Active';
-            mc.acknowledgement_no = `ACK/${mc.file_no || mc.id}/${maxYear}`;
-            mc.acknowledgement_date = todayStr;
-            await mc.save();
+          const isActive = maxYear >= currentYear;
+          const targetStatus = isActive ? 'Active' : 'Non Active';
 
-            // -- CUSTOMER HISTORY LOG --
-            try {
-              await db.models.CustomerHistory.create({
-                customer_no: mc.file_no || mc.new_file_no || mc.id.toString(),
-                mc_type: 'MC',
-                action_type: 'Renewal Approved',
-                description: `Renewal for Rs. ${renewal.amount} approved for years: ${years.join(', ')}`,
-                year: maxYear,
-                file_path: null,
-                action_by: req.body.actionBy || 'System'
-              });
-            } catch (histErr) {
-              console.error('Failed to log CustomerHistory for MC renewal:', histErr);
-            }
+          let combinedYears = years.join(', ');
+          if (mcom.renewal_paid_years) {
+            const existing = mcom.renewal_paid_years.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y));
+            const current = years ? years.map(y => parseInt(y)) : [];
+            const merged = Array.from(new Set([...existing, ...current])).sort((a, b) => a - b);
+            combinedYears = merged.join(', ');
+          }
+
+          mcom.renewal_paid = true;
+          mcom.renewal_paid_year = maxYear; // Integer
+          mcom.renewal_paid_years = combinedYears;
+          mcom.renewal_paid_amount = renewal.amount;
+          mcom.renewal_paid_date = todayStr;
+          mcom.renewal_receipt_no = renewal.ref_no;
+          mcom.renewal_period = maxYear.toString();
+          mcom.next_renewal_date = `${maxYear}-12-31`;
+          mcom.renewal_status = targetStatus;
+          mcom.renewal_date_vise = targetStatus;
+          mcom.active_non_active = targetStatus;
+          mcom.status = targetStatus;
+          mcom.renewal_payment_status = 'Approved';
+          mcom.acknowledgement_no = `ACK/MCOM/${mcom.new_file_no || mcom.file_no || mcom.id}/${maxYear}`;
+          mcom.acknowledgement_date = todayStr;
+          await mcom.save();
+
+          // -- CUSTOMER HISTORY LOG --
+          try {
+            await db.models.CustomerHistory.create({
+              customer_no: mcom.file_no || mcom.new_file_no || mcom.id.toString(),
+              mc_type: 'MCOM',
+              action_type: 'Renewal Approved',
+              description: `Renewal for Rs. ${renewal.amount} approved for years: ${years.join(', ')}`,
+              year: maxYear,
+              file_path: null,
+              action_by: req.body.actionBy || 'System'
+            });
+          } catch (histErr) {
+            console.error('Failed to log CustomerHistory for MCOM renewal:', histErr);
+          }
+        }
+      } else if (ManagementCorporation) {
+        let mc = renewal.mc_id ? await ManagementCorporation.findByPk(renewal.mc_id) : null;
+        if (!mc && renewal.plan_no) mc = await ManagementCorporation.findOne({ where: { plan_no: renewal.plan_no } });
+        if (!mc && renewal.mc_name) mc = await ManagementCorporation.findOne({ where: { management_corporation_name: renewal.mc_name } });
+        if (mc) {
+          if (renewal.mc_id !== mc.id) {
+            renewal.mc_id = mc.id;
+            await renewal.save();
+          }
+
+          const isActive = maxYear >= currentYear;
+          const targetStatus = isActive ? 'Active' : 'Non Active';
+
+          let combinedYears = years.join(', ');
+          if (mc.renewal_paid_years) {
+            const existing = mc.renewal_paid_years.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y));
+            const current = years ? years.map(y => parseInt(y)) : [];
+            const merged = Array.from(new Set([...existing, ...current])).sort((a, b) => a - b);
+            combinedYears = merged.join(', ');
+          }
+
+          mc.renewal_paid = true;
+          mc.renewal_paid_year = maxYear; // Integer
+          mc.renewal_paid_years = combinedYears;
+          mc.renewal_paid_amount = renewal.amount;
+          mc.renewal_paid_date = todayStr;
+          mc.renewal_receipt_no = renewal.ref_no;
+          mc.renewal_period = maxYear.toString();
+          mc.next_renewal_date = `${maxYear}-12-31`;
+          mc.renewal_payment_status = 'Approved';
+          mc.renewal_date_vise = targetStatus;
+          mc.status = targetStatus;
+          mc.acknowledgement_no = `ACK/${mc.new_file_no || mc.old_file_no || mc.file_no || mc.id}/${maxYear}`;
+          mc.acknowledgement_date = todayStr;
+          await mc.save();
+
+          // -- CUSTOMER HISTORY LOG --
+          try {
+            await db.models.CustomerHistory.create({
+              customer_no: mc.file_no || mc.new_file_no || mc.id.toString(),
+              mc_type: 'MC',
+              action_type: 'Renewal Approved',
+              description: `Renewal for Rs. ${renewal.amount} approved for years: ${years.join(', ')}`,
+              year: maxYear,
+              file_path: null,
+              action_by: req.body.actionBy || 'System'
+            });
+          } catch (histErr) {
+            console.error('Failed to log CustomerHistory for MC renewal:', histErr);
           }
         }
       }
@@ -300,6 +331,20 @@ router.post('/:refNo/reject', async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error('Failed to reject renewal:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+// DELETE a renewal
+router.delete('/:refNo', async (req, res) => {
+  try {
+    const { Renewal } = db.models;
+    const renewal = await Renewal.findOne({ where: { ref_no: req.params.refNo } });
+    if (!renewal) return res.status(404).json({ error: 'Record not found' });
+
+    await renewal.destroy();
+    res.json({ success: true, message: 'Renewal deleted successfully' });
+  } catch (err) {
+    console.error('Failed to delete renewal:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

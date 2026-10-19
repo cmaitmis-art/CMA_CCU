@@ -34,7 +34,7 @@ function buildInvoicePayload(mcRecord, payload, invoiceMeta = {}, userName = 'Sy
   const startYear = Number.isNaN(startDate.getTime()) ? new Date().getFullYear() : startDate.getFullYear();
   const periodEnd = invoiceMeta.period_end || payload.next_renewal_date || `${startYear}-12-31`;
   const dueDate = invoiceMeta.due_date || periodEnd;
-  const invoiceNumber = invoiceMeta.invoice_number || `INV-${mcRecord.file_no || mcRecord.id}-${Date.now()}`;
+  const invoiceNumber = invoiceMeta.invoice_number || `INV-${(mcRecord.file_no || mcRecord.id || 'MC').toString().replace(/\s+/g, '')}-${Date.now()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
 
   return {
     mc_id: mcRecord.id,
@@ -197,9 +197,106 @@ const WRITABLE_COLS = [
   'cl_additional_bylaws_pg',
 ];
 
+// All columns in the MC table that are stored as DATE (not DATETIME/TEXT).
+// Any value sent with an ISO timestamp suffix (T00:00:00.000Z) must be stripped
+// to plain YYYY-MM-DD or MySQL will throw ER_TRUNCATED_WRONG_VALUE.
+const DATE_COLS = [
+  'reg_date', 'agm_date', 'next_agm_date', 'next_renewal_date',
+  'land_registry_approved_date', 'renewal_date', 'renewal_paid_date',
+  'acknowledgement_date', 'cl_checked_date', 'cl_submitted_date',
+  'cl_photocopy_condo_plan_date', 'cl_reg_condo_plan_date',
+  'cl_cma_certificate_date', 'cl_declaration_date', 'cl_agm_minutes_date',
+];
+
+/**
+ * Strip ISO timestamp suffix from date fields and normalize valid dates.
+ * '2026-04-28T00:00:00.000Z' → '2026-04-28'
+ * '15/04/2024' → '2024-04-15'
+ * Excel serial numbers (e.g. 44561) → '2021-12-31'
+ * Already-clean YYYY-MM-DD values are returned unchanged.
+ * Non-date placeholders ('_', '-', 'N/A', etc.) or unparseable values → null
+ * null/undefined/''/falsy → null
+ */
+function sanitizeDateValue(v) {
+  if (v === null || v === undefined) return null;
+  if (v instanceof Date) {
+    return isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
+  }
+  if (typeof v === 'number') {
+    if (v >= 1000 && v <= 100000) {
+      const epoch = new Date(Date.UTC(1899, 11, 30));
+      epoch.setUTCDate(epoch.getUTCDate() + Math.floor(v));
+      return epoch.toISOString().slice(0, 10);
+    }
+    return null;
+  }
+  const s = String(v).trim();
+  if (!s) return null;
+  // Non-date placeholders like '_', '-', '--', '.... / .... / ....', 'n/a', etc.
+  if (/^[_.\-\/\s]+$/.test(s) || /^(n\/?a|nil|none|null|undefined|pending|tbd|\?|0000-00-00|00\/00\/0000|not\s+applicable|not\s+yet)$/i.test(s)) {
+    return null;
+  }
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // ISO with time: 2023-10-11T00:00:00.000Z or 2023-10-11 00:00:00
+  const isoMatch = s.match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
+  if (isoMatch) return isoMatch[1];
+  // YYYY/MM/DD or YYYY.MM.DD
+  const ymdMatch = s.match(/^(\d{4})[./](\d{1,2})[./](\d{1,2})$/);
+  if (ymdMatch) {
+    const y = ymdMatch[1];
+    const m = ymdMatch[2].padStart(2, '0');
+    const d = ymdMatch[3].padStart(2, '0');
+    if (parseInt(m, 10) >= 1 && parseInt(m, 10) <= 12 && parseInt(d, 10) >= 1 && parseInt(d, 10) <= 31) {
+      return `${y}-${m}-${d}`;
+    }
+  }
+  // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+  const dmyMatch = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  if (dmyMatch) {
+    const day = parseInt(dmyMatch[1], 10);
+    const month = parseInt(dmyMatch[2], 10);
+    const year = parseInt(dmyMatch[3], 10);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 1900 && year <= 2100) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+  // Excel serial number as string (e.g. "44561")
+  if (/^\d{4,5}$/.test(s)) {
+    const num = parseInt(s, 10);
+    if (num >= 1000 && num <= 99999) {
+      const epoch = new Date(Date.UTC(1899, 11, 30));
+      epoch.setUTCDate(epoch.getUTCDate() + num);
+      return epoch.toISOString().slice(0, 10);
+    }
+  }
+  // Fallback: parse with JS Date
+  const parsed = new Date(s);
+  if (!isNaN(parsed.getTime())) {
+    const yr = parsed.getFullYear();
+    if (yr >= 1900 && yr <= 2100) {
+      const mm = String(parsed.getMonth() + 1).padStart(2, '0');
+      const dd = String(parsed.getDate()).padStart(2, '0');
+      return `${yr}-${mm}-${dd}`;
+    }
+  }
+  // Never return an unparsed raw string for a DATE column!
+  return null;
+}
+
+function sanitizeDates(data) {
+  for (const col of DATE_COLS) {
+    if (col in data) {
+      data[col] = sanitizeDateValue(data[col]);
+    }
+  }
+  return data;
+}
+
 /**
  * Pick only allowed keys from the request body.
  * Converts empty strings to null (database-friendly).
+ * Also sanitizes all date fields to plain YYYY-MM-DD.
  */
 function pickWritable(body) {
   const out = {};
@@ -208,7 +305,7 @@ function pickWritable(body) {
       out[col] = body[col] === '' ? null : body[col];
     }
   }
-  return out;
+  return sanitizeDates(out);
 }
 
 /**
@@ -299,6 +396,64 @@ function deriveFields(data, isCreate = false) {
     if (data.residential !== undefined) data.residential_units = data.residential;
     if (data.non_residential !== undefined) data.non_residential_units = data.non_residential;
   }
+
+  const currentYear = new Date().getFullYear();
+
+  // 1. Derive / normalize renewal_date_vise
+  if (data.renewal_date_vise) {
+    const rawLower = String(data.renewal_date_vise).toLowerCase().trim();
+    if (rawLower.includes('non') || rawLower.includes('inactive')) {
+      data.renewal_date_vise = 'Non Active';
+    } else if (rawLower.includes('active')) {
+      data.renewal_date_vise = 'Active';
+    }
+  } else {
+    if (data.renewal_payment_status === 'Approved') {
+      data.renewal_date_vise = 'Active';
+    } else if (data.renewal_payment_status === 'Pending Approval') {
+      data.renewal_date_vise = 'Non Active';
+    } else if (data.renewal_period) {
+      const rpMatches = String(data.renewal_period).match(/\b(19|20)\d{2}\b/g);
+      const rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(data.renewal_period, 10);
+      if (!isNaN(rpYear)) {
+        data.renewal_date_vise = rpYear >= currentYear ? 'Active' : 'Non Active';
+      }
+    } else if (data.status === 'Active') {
+      data.renewal_date_vise = 'Active';
+    }
+  }
+
+  // 2. Derive / normalize next_renewal_date
+  if (!data.next_renewal_date && data.renewal_period) {
+    const rpMatches = String(data.renewal_period).match(/\b(19|20)\d{2}\b/g);
+    const rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(data.renewal_period, 10);
+    if (!isNaN(rpYear)) {
+      data.next_renewal_date = `${rpYear}-12-31`;
+    }
+  }
+
+  // 3. Derive / normalize agm_date_vise
+  if (data.agm_date_vise) {
+    const rawLower = String(data.agm_date_vise).toLowerCase().trim();
+    if (rawLower.includes('non') || rawLower.includes('inactive')) {
+      data.agm_date_vise = 'Non Active';
+    } else if (rawLower.includes('active')) {
+      data.agm_date_vise = 'Active';
+    }
+  } else {
+    if (data.next_agm_date) {
+      const nextD = new Date(data.next_agm_date);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      data.agm_date_vise = (!Number.isNaN(nextD.getTime()) && nextD >= today) ? 'Active' : 'Non Active';
+    } else if (data.agm_date) {
+      const agmD = new Date(data.agm_date);
+      const oneYearAgo = new Date();
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+      data.agm_date_vise = (!Number.isNaN(agmD.getTime()) && agmD >= oneYearAgo) ? 'Active' : 'Non Active';
+    }
+  }
+
   return data;
 }
 
@@ -375,7 +530,43 @@ router.get('/', async (req, res) => {
       andConditions.push({ year: Number(year) });
     }
     if (category) andConditions.push({ category });
-    if (town) andConditions.push({ town: { $like: `%${town}%` } });
+    if (town) {
+      const cleanTown = String(town).trim();
+      const isLavinia = /m(oun)?t\.?\s*lavinia/i.test(cleanTown);
+      const isJaEla = /ja\s*-?\s*ela/i.test(cleanTown);
+      const isNuwara = /nuwara\s*-?\s*eliya/i.test(cleanTown);
+
+      if (isLavinia) {
+        andConditions.push({
+          $or: [
+            { town: { $like: '%Mt. Lavinia%' } },
+            { town: { $like: '%Mount Lavinia%' } },
+            { address: { $like: '%Lavinia%' } },
+          ]
+        });
+      } else if (isJaEla) {
+        andConditions.push({
+          $or: [
+            { town: { $like: '%Ja%Ela%' } },
+            { address: { $like: '%Ja%Ela%' } },
+          ]
+        });
+      } else if (isNuwara) {
+        andConditions.push({
+          $or: [
+            { town: { $like: '%Nuwara%Eliya%' } },
+            { address: { $like: '%Nuwara%Eliya%' } },
+          ]
+        });
+      } else {
+        andConditions.push({
+          $or: [
+            { town: { $like: `%${cleanTown}%` } },
+            { address: { $like: `%${cleanTown}%` } },
+          ]
+        });
+      }
+    }
     if (renewal_vise) andConditions.push({ renewal_date_vise: { $like: `${renewal_vise}%` } });
     if (agm_vise) andConditions.push({ agm_date_vise: { $like: `${agm_vise}%` } });
 
@@ -391,7 +582,12 @@ router.get('/', async (req, res) => {
       raw: true,
     });
 
-    res.json({ rows: records, total, page: Number(page), limit: Number(limit) });
+    // Sanitize date fields in every record before sending to frontend.
+    // Existing DB rows may contain ISO timestamps (2023-10-11T00:00:00.000Z)
+    // which need to be stripped to plain YYYY-MM-DD for display and filtering.
+    const cleanedRecords = records.map(r => sanitizeDates({ ...r }));
+
+    res.json({ rows: cleanedRecords, total, page: Number(page), limit: Number(limit) });
   } catch (err) {
     console.error('GET /mc error:', err);
     res.status(500).json({ error: err.message });
@@ -422,7 +618,7 @@ router.get('/:id', async (req, res) => {
   try {
     const record = await ManagementCorporation.findByPk(req.params.id);
     if (!record) return res.status(404).json({ error: 'Not found' });
-    res.json(record.toJSON());
+    res.json(sanitizeDates({ ...record.toJSON() }));
   } catch (err) {
     console.error('GET /mc/:id error:', err);
     res.status(500).json({ error: err.message });
@@ -467,43 +663,57 @@ router.post('/', async (req, res) => {
     }];
 
     const transaction = await db.sequelize.transaction();
+
+    // Step 1: Create the MC record
+    let record;
     try {
-      const record = await ManagementCorporation.create({
+      record = await ManagementCorporation.create({
         ...data,
         created_by,
         modified_by,
         history: JSON.stringify(initialHistory),
       }, { transaction });
+    } catch (mcErr) {
+      await transaction.rollback();
+      console.error('POST /mc MC creation error:', mcErr);
+      if (mcErr.name === 'SequelizeUniqueConstraintError') {
+        return res.status(409).json({ error: `File No "${data.file_no}" already exists. Please use a different File No.` });
+      }
+      return res.status(500).json({ error: mcErr.message });
+    }
 
+    // Step 2: Create the registration invoice (non-fatal — MC is already saved)
+    try {
       const invoicePayload = buildInvoicePayload(record, data, req.body.invoice || {}, user_name);
       await RegistrationPayableInvoice.create(invoicePayload, { transaction });
-
-      await transaction.commit();
-
-      // -- CUSTOMER HISTORY LOG --
-      try {
-        await db.models.CustomerHistory.create({
-          customer_no: data.file_no,
-          mc_type: 'MC',
-          action_type: 'Registration',
-          description: `MC Registered: ${data.name || data.management_corporation_name || ''}`,
-          year: new Date().getFullYear(),
-          file_path: null,
-          action_by: user_name
-        });
-      } catch (histErr) {
-        console.error('Failed to log CustomerHistory on MC creation:', histErr);
-      }
-
-      res.status(201).json(record.toJSON());
     } catch (invoiceErr) {
+      // Invoice failed — rollback everything so MC is not left without invoice
       await transaction.rollback();
       console.error('POST /mc invoice creation error:', invoiceErr);
       if (invoiceErr.name === 'SequelizeUniqueConstraintError') {
-        return res.status(409).json({ error: 'Invoice could not be created: duplicate invoice number' });
+        return res.status(409).json({ error: 'Invoice could not be created: duplicate invoice number. Please try again.' });
       }
-      return res.status(500).json({ error: invoiceErr.message });
+      return res.status(500).json({ error: `Invoice creation failed: ${invoiceErr.message}` });
     }
+
+    await transaction.commit();
+
+    // Step 3: Log customer history (non-fatal)
+    try {
+      await db.models.CustomerHistory.create({
+        customer_no: data.file_no,
+        mc_type: 'MC',
+        action_type: 'Registration',
+        description: `MC Registered: ${data.name || data.management_corporation_name || ''}`,
+        year: new Date().getFullYear(),
+        file_path: null,
+        action_by: user_name
+      });
+    } catch (histErr) {
+      console.error('Failed to log CustomerHistory on MC creation:', histErr);
+    }
+
+    res.status(201).json(record.toJSON());
   } catch (err) {
     console.error('POST /mc error:', err);
     if (err.name === 'SequelizeUniqueConstraintError') {
@@ -804,5 +1014,7 @@ router.post('/bulk', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+router.sanitizeDateValue = sanitizeDateValue;
 
 module.exports = router;

@@ -5,10 +5,32 @@ import { fixMojibakeDeep } from './utils/sinhalaUtils.js';
 // Automatically attaches user information to all POST, PUT, and PATCH JSON requests.
 // This ensures that backend audit logs (created_by, modified_by, history)
 // correctly record the user performing the action, rather than defaulting to 'System'.
+
+// --- Concurrency Limit for cPanel CloudLinux (508 Loop Detected / EP Limits) ---
+const MAX_CONCURRENT_REQUESTS = 2;
+let activeRequests = 0;
+const requestQueue = [];
+
+function processQueue() {
+  if (requestQueue.length > 0 && activeRequests < MAX_CONCURRENT_REQUESTS) {
+    const { resolve } = requestQueue.shift();
+    resolve();
+  }
+}
+
 const originalFetch = window.fetch;
 window.fetch = async function (url, options) {
-  let finalUrl = url;
-  if (options) {
+  // Wait in line if too many requests are active
+  await new Promise(resolve => {
+    requestQueue.push({ resolve });
+    processQueue();
+  });
+  
+  activeRequests++;
+  
+  try {
+    let finalUrl = url;
+    if (options) {
     const userStr = sessionStorage.getItem('cma_currentUser');
     if (userStr) {
       const user = JSON.parse(userStr);
@@ -57,7 +79,7 @@ window.fetch = async function (url, options) {
   // Add retry logic for 502 Bad Gateway (Server restarting) or network errors
   const maxRetries = 3;
   const retryDelayMs = 1500;
-  
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const response = await originalFetch.call(this, finalUrl, options);
@@ -75,6 +97,10 @@ window.fetch = async function (url, options) {
       }
       throw err;
     }
+  }
+  } finally {
+    activeRequests--;
+    processQueue();
   }
 };
 // -------------------------------------------------
@@ -281,8 +307,8 @@ export async function fetchPendingCfiles(limit = 5) {
 }
 
 // ========== MC API ==========
-export async function fetchMCs({ status, year, month, category, municipality, page, limit, q, searchField, renewal_vise, agm_vise } = {}) {
-  const url = buildUrl(`${API_BASE}/mc`, { status, year, month, category, municipality, page, limit, q, searchField, renewal_vise, agm_vise });
+export async function fetchMCs({ status, year, month, category, municipality, page, limit, q, searchField, renewal_vise, agm_vise, town } = {}) {
+  const url = buildUrl(`${API_BASE}/mc`, { status, year, month, category, municipality, page, limit, q, searchField, renewal_vise, agm_vise, town });
   const response = await fetch(url);
   return handleResponse(response);
 }
@@ -366,8 +392,8 @@ export async function deleteMComsBulk(fileNos = []) {
 }
 
 // ========== M.COM API ==========
-export async function fetchMComs({ year, month, municipality, mc_mcom, category, status, renewalPeriod, agmYear, q, searchField, page, limit } = {}) {
-  const url = buildUrl(`${API_BASE}/mcom`, { year, month, municipality, mc_mcom, category, status, renewalPeriod, agmYear, q, searchField, page, limit });
+export async function fetchMComs({ year, month, municipality, mc_mcom, category, status, renewalPeriod, agmYear, q, searchField, page, limit, town } = {}) {
+  const url = buildUrl(`${API_BASE}/mcom`, { year, month, municipality, mc_mcom, category, status, renewalPeriod, agmYear, q, searchField, page, limit, town });
   const response = await fetch(url);
   return handleResponse(response);
 }
@@ -418,6 +444,13 @@ export async function rejectRenewal(refNo, reason, actionBy) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ reason, actionBy }),
+  });
+  return handleResponse(response);
+}
+
+export async function deleteRenewal(refNo) {
+  const response = await fetch(`${API_BASE}/renewals/${refNo}`, {
+    method: 'DELETE',
   });
   return handleResponse(response);
 }
@@ -686,20 +719,30 @@ export async function undismissNotification(notificationId, userId) {
 }
 
 // --- AGM Management ---
-export async function fetchAgmRecords({ q, status, year, month, meetingType, page = 1, limit = 20 } = {}) {
-  const url = buildUrl(`${API_BASE}/agm`, { q, status, year, month, meetingType, page, limit });
+export async function fetchAgmRecords({ q, status, year, month, meetingType, recordType = 'mc', page = 1, limit = 20 } = {}) {
+  const url = buildUrl(`${API_BASE}/agm`, { q, status, year, month, meetingType, recordType, page, limit });
   const response = await fetch(url);
   return handleResponse(response);
 }
 
-export async function uploadAgmDocument(mc_id, file, notes, uploaded_by) {
+export async function uploadAgmDocument(mc_id, file, notes, uploaded_by, record_type = 'mc') {
   const formData = new FormData();
   formData.append('document', file);
   if (notes) formData.append('notes', notes);
   if (uploaded_by) formData.append('uploaded_by', uploaded_by);
+  if (record_type) formData.append('record_type', record_type);
   const response = await fetch(`${API_BASE}/agm/${mc_id}/upload`, {
     method: 'POST',
     body: formData,
+  });
+  return handleResponse(response);
+}
+
+export async function updateAgmMeeting(id, data) {
+  const response = await fetch(`${API_BASE}/agm/${id}/meeting`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
   });
   return handleResponse(response);
 }

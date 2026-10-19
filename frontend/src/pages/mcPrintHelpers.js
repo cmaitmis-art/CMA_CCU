@@ -117,7 +117,7 @@ export function buildMcChecklistPrintHtml(record = {}, checks = {}, note = '') {
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Document Check List for Management Corporation</title>
+  <title></title>
   <style>
     body { font-family: 'Times New Roman', serif; margin: 0; padding: 0; background: #fff; }
     @media print { body { margin: 0; padding: 0; } }
@@ -132,23 +132,24 @@ export function buildMcChecklistPrintHtml(record = {}, checks = {}, note = '') {
     .official-form-print .of-box { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border: 1.5px solid #111; font-size: 12px; font-weight: 700; margin: 0 4px; flex-shrink: 0; vertical-align: middle; }
     .official-form-print .of-section-title { font-weight: 700; font-size: 13.5px; margin: 10px 0 4px; text-transform: uppercase; }
     
-    table.chk-table { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-top: 6px; }
-    table.chk-table th, table.chk-table td { border: 1px solid #111; padding: 4px 6px; vertical-align: middle; }
-    table.chk-table td:nth-child(2) { width: 30px; text-align: center; }
+    table.chk-table { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-top: 8px; margin-bottom: 12px; }
+    table.chk-table th, table.chk-table td { border: 1px solid #111; padding: 7px 8px; vertical-align: middle; }
+    table.chk-table td:nth-child(2) { width: 32px; text-align: center; }
     table.chk-table td:nth-child(3) { width: 50px; text-align: left; }
     
-    .grid-units { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 20px; padding-left: 15px; font-size: 13.5px; margin-top: 5px; margin-bottom: 15px;}
+    .grid-units { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; padding-left: 15px; font-size: 13.5px; margin-top: 8px; margin-bottom: 16px;}
     .grid-unit-row { display: flex; align-items: center; justify-content: space-between; }
     
-    .official-form-print .of-sign { display: flex; justify-content: space-between; margin-top: 40px; font-size: 13.5px; page-break-inside: avoid; }
-    .official-form-print .of-sign div { border-top: 1px solid #111; padding-top: 4px; width: 40%; text-align: center; }
+    .official-form-print .of-sign { display: flex; justify-content: space-between; margin-top: 50px; font-size: 13.5px; page-break-inside: avoid; }
+    .official-form-print .of-sign div { border-top: 1px solid #111; padding-top: 6px; width: 42%; text-align: center; }
 
     @media print {
-      @page { size: A4 portrait; margin: 0; }
+      @page { size: A4 portrait; margin: 0 !important; }
       .official-form-print { 
         max-width: 100%;
         width: 100%;
-        padding: 12mm 15mm; 
+        padding: 8mm 15mm 8mm 1.2in; /* 1.2 inches on the left side for filing, 15mm on the right */
+        box-sizing: border-box;
         display: block;
       }
     }

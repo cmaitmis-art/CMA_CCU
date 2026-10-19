@@ -10,7 +10,7 @@ module.exports = (sequelize, DataTypes) => {
 
       // Excel key
       file_no: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: false,
         unique: true,
       },
@@ -22,7 +22,7 @@ module.exports = (sequelize, DataTypes) => {
       },
 
       old_file_no: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: true,
       },
       remark: {
@@ -30,7 +30,7 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
       },
       new_file_no: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: true,
       },
 
@@ -183,7 +183,7 @@ module.exports = (sequelize, DataTypes) => {
       },
 
       certificate_file_no: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: true,
       },
       email_address: {
@@ -207,7 +207,7 @@ module.exports = (sequelize, DataTypes) => {
       },
 
       status: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: true,
         defaultValue: 'Active',
       },

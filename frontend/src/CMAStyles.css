@@ -18,6 +18,11 @@
   --blue: #2563eb;
 }
 
+@keyframes cma-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -2261,7 +2266,7 @@ td .action-btn:active {
 .official-letter .ol-ref {
   display: flex;
   justify-content: space-between;
-  font-weight: 700;
+  font-weight: normal;
   margin-bottom: 14px;
 }
 
@@ -2347,6 +2352,57 @@ td .action-btn:active {
 .official-letter [contenteditable]:hover {
   background: rgba(79, 110, 247, 0.07);
   box-shadow: inset 0 0 0 1px rgba(79, 110, 247, 0.25);
+}
+
+/* Compact mode for long multi-table letters to fit strictly on 1 page */
+.official-letter.compact-letter {
+  font-size: 13.5px;
+  line-height: 1.25;
+}
+.official-letter.compact-letter .ol-ref {
+  margin-bottom: 5px;
+  font-weight: normal;
+}
+.official-letter.compact-letter .ol-addr {
+  margin-bottom: 5px;
+}
+.official-letter.compact-letter .ol-addr div {
+  margin: 1px 0;
+  line-height: 1.25;
+}
+.official-letter.compact-letter .ol-title {
+  margin: 6px 0;
+  font-size: 13.5px;
+  line-height: 1.25;
+}
+.official-letter.compact-letter .ol-yearline {
+  margin: 3px 0 2px;
+  font-size: 13px;
+}
+.official-letter.compact-letter .ol-section {
+  margin: 4px 0 2px;
+  font-size: 12px;
+}
+.official-letter.compact-letter .ol-para {
+  margin: 3px 0;
+  font-size: 13.5px;
+  line-height: 1.25;
+}
+.official-letter.compact-letter table.ol-table {
+  font-size: 11.5px;
+  margin: 2px 0 4px;
+}
+.official-letter.compact-letter table.ol-table th,
+.official-letter.compact-letter table.ol-table td {
+  padding: 2px 4px;
+}
+.official-letter.compact-letter .ol-sign {
+  margin-top: 6px;
+  font-size: 13.5px;
+  line-height: 1.25;
+}
+.official-letter.compact-letter .ol-sign-space {
+  height: 18px;
 }
 
 .official-letter [contenteditable]:focus {

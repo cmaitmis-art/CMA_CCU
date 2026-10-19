@@ -305,10 +305,6 @@ export default function DiscussionManagement({ currentUser }) {
   // Auto-refresh every 30 seconds
   const triggerRefresh = useCallback(() => setRefreshTick(t => t + 1), []);
   useAutoRefresh(triggerRefresh, 30000);
-
-
-
-
   const loadDiscussions = async () => {
     setLoading(true);
     try {
@@ -1159,11 +1155,11 @@ export default function DiscussionManagement({ currentUser }) {
             <div style={{ fontSize: 13, color: theme.text2 }}>
               Showing <strong>{discussions.length}</strong> of <strong>{totalCount}</strong> discussions
             </div>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               {!viewAll && totalCount > limit && (() => {
                 const pageCount = Math.ceil(totalCount / limit);
                 return (
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                     <button
                       onClick={() => setPage(Math.max(1, page - 1))}
                       disabled={page === 1}
@@ -1207,7 +1203,7 @@ export default function DiscussionManagement({ currentUser }) {
                   background: viewAll ? '#10b981' : '#f1f5f9',
                   color: viewAll ? '#ffffff' : '#334155',
                   border: viewAll ? 'none' : '1px solid #cbd5e1',
-                  padding: '5px 12px', fontSize: 12, borderRadius: 6, marginLeft: 8, cursor: 'pointer'
+                  padding: '5px 12px', fontSize: 12, borderRadius: 6, cursor: 'pointer'
                 }}
               >
                 <i className={loading && viewAll ? 'fas fa-spinner fa-spin' : viewAll ? 'fas fa-check-circle' : 'fas fa-list'} style={{ marginRight: 5 }} />
@@ -1221,7 +1217,7 @@ export default function DiscussionManagement({ currentUser }) {
                 }}
                 style={{
                   background: '#e0e7ff', color: '#4338ca', border: '1px solid #c7d2fe',
-                  padding: '5px 12px', fontSize: 12, borderRadius: 6, marginLeft: 8, cursor: 'pointer'
+                  padding: '5px 12px', fontSize: 12, borderRadius: 6, cursor: 'pointer'
                 }}
               >
                 {isZoomed ? (
@@ -1697,9 +1693,6 @@ export default function DiscussionManagement({ currentUser }) {
             </div>
           </div>
         )}
-
-
-
         {exportModalOpen && (
           <GenericExportModal
             title="Export Discussions"

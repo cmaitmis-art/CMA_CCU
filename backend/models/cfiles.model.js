@@ -8,7 +8,7 @@ module.exports = (sequelize, DataTypes) => {
         autoIncrement: true,
       },
       file_no: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: false,
         unique: true,
       },
@@ -33,7 +33,7 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
       },
       registered_ccu_file_no: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: true,
       },
       remarks: {
@@ -61,7 +61,7 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
       },
       status: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: true,
         defaultValue: 'New',
       },

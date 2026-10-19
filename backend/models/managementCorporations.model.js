@@ -8,7 +8,7 @@ module.exports = (sequelize, DataTypes) => {
         autoIncrement: true,
       },
       file_no: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: false,
         unique: true,
       },
@@ -73,11 +73,11 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
       },
       old_file_no: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: true,
       },
       new_file_no: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: true,
       },
       management_corporation_name: {
@@ -177,7 +177,7 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
       },
       certificate_division_file_no: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: true,
       },
       land_registry_approved_date: {
@@ -193,7 +193,7 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
       },
       status: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: true,
         defaultValue: 'Active',
       },

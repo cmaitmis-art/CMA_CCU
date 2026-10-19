@@ -108,7 +108,7 @@ router.patch('/:id', async (req, res) => {
       return res.status(404).json({ error: 'User not found.' });
     }
 
-    const { username, password, name, role, department, designation, email, avatar_url, user_name } = req.body || {};
+    const { username, password, name, role, department, designation, email, phone, year, avatar_url, user_name } = req.body || {};
     if (username) {
       const normalizedUsername = normalizeUsername(username);
       if (normalizedUsername !== user.username) {
@@ -124,6 +124,8 @@ router.patch('/:id', async (req, res) => {
     if (department !== undefined) user.department = String(department || '').trim() || null;
     if (designation !== undefined) user.designation = String(designation || '').trim() || null;
     if (email !== undefined) user.email = String(email || '').trim() || null;
+    if (phone !== undefined) user.phone = String(phone || '').trim() || null;
+    if (year !== undefined) user.year = String(year || '').trim() || null;
     if (avatar_url !== undefined) user.avatar_url = String(avatar_url || '').trim() || null;
     if (password) user.password = await bcrypt.hash(String(password), 10);
 

@@ -66,7 +66,8 @@ router.post('/login', async (req, res) => {
     res.json(payload);
   } catch (err) {
     console.error('Auth login failed:', err);
-    res.status(500).json({ error: 'Login failed.' });
+    const detail = err?.parent?.sqlMessage || err?.original?.message || err?.message || 'Database error';
+    res.status(500).json({ error: `Login failed: ${detail}` });
   }
 });
 

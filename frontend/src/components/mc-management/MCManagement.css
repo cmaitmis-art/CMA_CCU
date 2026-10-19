@@ -18,6 +18,7 @@
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
+
 .mc-panel-scroll::-webkit-scrollbar {
   display: none;
 }
@@ -26,6 +27,7 @@
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
+
 .mc-header-btn-row::-webkit-scrollbar {
   display: none;
 }
@@ -130,11 +132,15 @@
 }
 
 .mc-header-btn-row {
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* IE/Edge */
+  scrollbar-width: none;
+  /* Firefox */
+  -ms-overflow-style: none;
+  /* IE/Edge */
 }
+
 .mc-header-btn-row::-webkit-scrollbar {
-  display: none; /* Chrome/Safari */
+  display: none;
+  /* Chrome/Safari */
 }
 
 /* Table Wrapper: fills remaining viewport height automatically */
@@ -277,18 +283,22 @@
   .mc-table-wrapper {
     max-height: calc(100dvh - 380px);
   }
+
   .mc-th-actions,
   .mc-td-actions {
     width: 180px;
     min-width: 180px;
     max-width: 180px;
   }
+
   .mc-th-status {
     right: 179px;
   }
+
   .mc-td-status {
     right: 179px;
   }
+
   .mc-btn-outline,
   .mc-btn-primary {
     padding: 7px 11px;
@@ -302,43 +312,51 @@
     padding: 8px;
     align-items: flex-end;
   }
+
   .mc-modal {
     max-width: 100%;
     border-radius: 12px 12px 0 0;
     max-height: 96dvh;
   }
+
   .mc-table-wrapper {
     max-height: calc(100dvh - 440px);
     min-height: 250px;
   }
+
   .mc-table {
     table-layout: auto;
     min-width: 680px;
   }
+
   .mc-th-actions,
   .mc-td-actions {
     width: 140px;
     min-width: 140px;
     max-width: 140px;
   }
+
   .mc-th-status {
     right: 139px;
     width: 140px;
     min-width: 140px;
     max-width: 140px;
   }
+
   .mc-td-status {
     right: 139px;
     width: 140px;
     min-width: 140px;
     max-width: 140px;
   }
+
   .mc-btn-outline,
   .mc-btn-primary {
     padding: 6px 10px;
     font-size: 12px;
     gap: 4px;
   }
+
   .mc-section-label {
     grid-column: span 1;
   }
@@ -349,9 +367,11 @@
   .mc-overlay {
     padding: 4px;
   }
+
   .mc-modal {
     max-height: 98dvh;
   }
+
   .mc-table-wrapper {
     max-height: calc(100dvh - 480px);
     min-height: 200px;

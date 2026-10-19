@@ -815,7 +815,7 @@ export default function MCManagementBackend({ currentUser, isViewOnly }) {
           <p class="ol-para">Yours Faithfully,</p>
           <div class="ol-sign">
             <div class="ol-sign-space"></div>
-            <div><strong>Samantha Ampaala</strong></div>
+            <div><strong>Samantha Ampagala</strong></div>
             <div><strong>Assistant General Manager (Customer Care)</strong></div>
             <div><strong>Condominium Management Authority</strong></div>
           </div>

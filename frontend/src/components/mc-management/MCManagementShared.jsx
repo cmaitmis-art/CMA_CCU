@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getServerDate } from '../../utils/serverTime';
 
 // -- Registration Fee Auto-Calc Constants --
 export const CATEGORY_RATES = {
@@ -365,29 +366,33 @@ export function ActionBtn({ icon, color, title, onClick }) {
   );
 }
 
-export function FormField({ label, value, onChange, type = 'text', span2 }) {
+export function FormField({ label, value, onChange, type = 'text', span2, placeholder }) {
   const inputId = 'mc_form_' + String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 5, gridColumn: span2 ? 'span 2' : undefined }}>
       <label htmlFor={inputId} style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>{label}</label>
-      <input id={inputId} name={inputId} type={type} value={value ?? ''} onChange={(e) => onChange(e.target.value)} className="mc-input" />
+      <input id={inputId} name={inputId} type={type} value={value ?? ''} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} className="mc-input" />
     </div>
   );
 }
 
+
 export function FormSelect({ label, value, onChange, options }) {
   const inputId = 'mc_form_' + String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  // Check if value matches one of the options; if not, treat it as unselected
+  const normalizedValue = options.includes(value) ? value : '';
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
       <label htmlFor={inputId} style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>{label}</label>
-      <select id={inputId} name={inputId} value={value ?? ''} onChange={(e) => onChange(e.target.value)} className="mc-input">
+      <select id={inputId} name={inputId} value={normalizedValue} onChange={(e) => onChange(e.target.value)} className="mc-input">
         {options.map((o) => (
-          <option key={o} value={o}>{o}</option>
+          <option key={o === '' ? '__blank__' : o} value={o}>{o === '' ? '— Select —' : o}</option>
         ))}
       </select>
     </div>
   );
 }
+
 
 export function CheckboxField({ label, checked, onChange }) {
   const inputId = 'mc_chk_' + String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '_');
@@ -495,6 +500,16 @@ export function getAutoDetectedPrivateCategoryFromRecord(record) {
 
 export function getCategoryDisplayValue(record) {
   if (!record) return '';
+
+  // If this is a Government MC, private category (Luxury/Semi-Luxury/Normal) does not apply.
+  // Return the government category directly.
+  const ownershipType = String(record.ownership_type || '').toLowerCase().trim();
+  const categoryStr = String(record.category || '').toLowerCase().trim();
+  const isGovernment = ownershipType === 'government' || categoryStr.includes('government');
+  if (isGovernment) {
+    return record.category || 'Government';
+  }
+
   const overrideKey = normalizePrivateCategoryKey(record.private_category_override);
   if (overrideKey) return getPrivateCategoryLabel(overrideKey);
 
@@ -546,10 +561,47 @@ export function deriveStatus(v) {
   return 'Active';
 }
 
+function toLocalDateString(d) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 export function coerceDateText(v) {
   if (v === null || v === undefined || v === '') return '';
-  if (v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString().slice(0, 10);
+  if (v instanceof Date && !Number.isNaN(v.getTime())) return toLocalDateString(v);
   const text = String(v).trim();
+  if (!text) return '';
+  // Reject non-date placeholders like '_', '-', 'N/A', etc.
+  if (/^[_.\-\/\s]+$/.test(text) || /^(n\/?a|nil|none|null|undefined|pending|tbd|\?|0000-00-00|00\/00\/0000|not\s+applicable|not\s+yet)$/i.test(text)) {
+    return '';
+  }
+  // Already a clean ISO date — return as-is
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  // ISO with time
+  const isoMatch = text.match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
+  if (isoMatch) return isoMatch[1];
+  // YYYY/MM/DD or YYYY.MM.DD
+  const ymdMatch = text.match(/^(\d{4})[./](\d{1,2})[./](\d{1,2})$/);
+  if (ymdMatch) {
+    const y = ymdMatch[1];
+    const m = ymdMatch[2].padStart(2, '0');
+    const d = ymdMatch[3].padStart(2, '0');
+    if (parseInt(m, 10) >= 1 && parseInt(m, 10) <= 12 && parseInt(d, 10) >= 1 && parseInt(d, 10) <= 31) {
+      return `${y}-${m}-${d}`;
+    }
+  }
+  // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+  const dmyMatch = text.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  if (dmyMatch) {
+    const day = parseInt(dmyMatch[1], 10);
+    const month = parseInt(dmyMatch[2], 10);
+    const year = parseInt(dmyMatch[3], 10);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 1900 && year <= 2100) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
   const numeric = Number(text);
   if (!Number.isNaN(numeric) && numeric > 1000 && numeric < 100000) {
     const epoch = new Date(Date.UTC(1899, 11, 30));
@@ -557,8 +609,13 @@ export function coerceDateText(v) {
     return epoch.toISOString().slice(0, 10);
   }
   const parsed = new Date(text);
-  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
-  return text;
+  if (!Number.isNaN(parsed.getTime())) {
+    const yr = parsed.getFullYear();
+    if (yr >= 1900 && yr <= 2100) {
+      return toLocalDateString(parsed);
+    }
+  }
+  return '';
 }
 
 export function formatDisplayDate(v) {
@@ -569,11 +626,25 @@ export function formatDisplayDate(v) {
   return d;
 }
 
+export function getTodayDotDate() {
+  const now = typeof getServerDate === 'function' ? getServerDate() : new Date();
+  const day = String(now.getDate()).padStart(2, '0');
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const year = now.getFullYear();
+  return `${day}.${month}.${year}`;
+}
+
 // Letter-style date used in the Renewal Request / Acknowledgement covering
 // letters (DD.MM.YYYY with dots, matching the official CMA letter format).
 export function formatDotDate(v) {
-  const d = coerceDateText(v);
-  if (!d) return '__________';
+  if (!v) return getTodayDotDate();
+  const trimmed = String(v).trim();
+  if (/^\d{1,2}\.\d{1,2}\.\d{4}$/.test(trimmed)) {
+    const parts = trimmed.split('.');
+    return `${parts[0].padStart(2, '0')}.${parts[1].padStart(2, '0')}.${parts[2]}`;
+  }
+  const d = coerceDateText(trimmed);
+  if (!d) return trimmed || getTodayDotDate();
   const m = d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (m) return `${m[3]}.${m[2]}.${m[1]}`;
   return d;
@@ -941,7 +1012,8 @@ export const BACKEND_FIELDS = [
   'cl_services_facilities_pg', 'cl_written_assurance_pg', 'cl_photocopy_condo_plan_pg', 'cl_cma_certificate_pg', 'cl_declaration_pg', 'cl_agm_minutes_pg',
   'cl_attendance_pg', 'cl_insurance_pg', 'cl_owners_list_pg', 'cl_constitution_pg', 'cl_bylaws_pg', 'cl_additional_bylaws_pg',
   // Renewal payment & acknowledgement tracking (NEW - requires matching columns on the backend `mc` table)
-  'renewal_paid', 'renewal_paid_date', 'renewal_paid_amount', 'renewal_paid_year',
+  'next_renewal_date', 'renewal_paid', 'renewal_paid_date', 'renewal_paid_amount', 'renewal_paid_year',
+  'renewal_paid_years', 'renewal_last_paid_years',
   'renewal_receipt_no', 'acknowledgement_no', 'acknowledgement_date', 'renewal_payment_status',
 ];
 
@@ -979,8 +1051,51 @@ export function toBackendRecordFromExcelRow(row) {
   const treasurer_unit_no = toText(getCell(row, 'Treasurer_Unit_No', 'Treasurer unit No.', 'unit No_1', 'unit No', 'treasurer_unit_no'));
   const agm_date = coerceDateText(getCell(row, 'AGM Date', 'agm_date'));
   const next_agm_date = coerceDateText(getCell(row, 'Next_AGM_Date', 'Next AGM Date', 'next_agm_date'));
-  const renewal_date_vise = coerceDateText(getCell(row, 'Renewal_Date_Vise', 'Renewal Date Vise', 'renewal_date_vise'));
-  const agm_date_vise = coerceDateText(getCell(row, 'AGM_Date_Vise', 'AGM Date Vise', 'agm_date_vise'));
+  
+  // Renewal Date Vise & AGM Date Vise are status texts ('Active', 'Non Active'), NOT dates.
+  const raw_renewal_vise = toText(getCell(row, 'Renewal_Date_Vise', 'Renewal Date Vise', 'renewal_date_vise', 'Renewal Date Wise', 'renewal_date_wise'));
+  const raw_agm_vise = toText(getCell(row, 'AGM_Date_Vise', 'AGM Date Vise', 'agm_date_vise', 'AGM Date Wise', 'agm_date_wise'));
+
+  const currentYear = new Date().getFullYear();
+  let renewal_date_vise = null;
+  if (raw_renewal_vise) {
+    const s = raw_renewal_vise.toLowerCase();
+    renewal_date_vise = (s.includes('non') || s.includes('inactive')) ? 'Non Active' : (s.includes('active') ? 'Active' : raw_renewal_vise);
+  } else if (renewal_period) {
+    const rpMatches = String(renewal_period).match(/\b(19|20)\d{2}\b/g);
+    const rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(renewal_period, 10);
+    if (!isNaN(rpYear)) {
+      renewal_date_vise = rpYear >= currentYear ? 'Active' : 'Non Active';
+    }
+  } else if (status === 'Active') {
+    renewal_date_vise = 'Active';
+  }
+
+  let agm_date_vise = null;
+  if (raw_agm_vise) {
+    const s = raw_agm_vise.toLowerCase();
+    agm_date_vise = (s.includes('non') || s.includes('inactive')) ? 'Non Active' : (s.includes('active') ? 'Active' : raw_agm_vise);
+  } else if (next_agm_date) {
+    const nextD = new Date(next_agm_date);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    agm_date_vise = (!Number.isNaN(nextD.getTime()) && nextD >= today) ? 'Active' : 'Non Active';
+  } else if (agm_date) {
+    const agmD = new Date(agm_date);
+    const oneYearAgo = new Date();
+    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+    agm_date_vise = (!Number.isNaN(agmD.getTime()) && agmD >= oneYearAgo) ? 'Active' : 'Non Active';
+  }
+
+  let next_renewal_date = coerceDateText(getCell(row, 'Next_Renewal_Date', 'Next Renewal Date', 'next_renewal_date'));
+  if (!next_renewal_date && renewal_period) {
+    const rpMatches = String(renewal_period).match(/\b(19|20)\d{2}\b/g);
+    const rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(renewal_period, 10);
+    if (!isNaN(rpYear)) {
+      next_renewal_date = `${rpYear}-12-31`;
+    }
+  }
+
   const mc = toText(getCell(row, 'MC', 'mc'));
   const engineer = toText(getCell(row, 'Eng.', 'Engineer', 'engineer'));
   const ma = toText(getCell(row, 'MA', 'ma'));
@@ -1003,11 +1118,19 @@ export function toBackendRecordFromExcelRow(row) {
     residential: residential_units, non_residential: derivedNonResidentialUnits,
     non_res_shops, non_res_office, non_res_hotel,
     service_units, category: categoryLabel, year, secretary, treasurer, secretary_unit_no,
-    treasurer_unit_no, agm_date, next_agm_date, renewal_period, renewal_date_vise,
-    agm_date_vise, mc, engineer, ma, agm_minutes, attendance, audited_accounts,
+    treasurer_unit_no,
+    agm_date: agm_date || null,
+    next_agm_date: next_agm_date || null,
+    renewal_period,
+    renewal_date_vise: renewal_date_vise || null,
+    agm_date_vise: agm_date_vise || null,
+    next_renewal_date: next_renewal_date || null,
+    mc, engineer, ma, agm_minutes, attendance, audited_accounts,
     final_accounts, building_insurance, sinking_fund, budget_proposal, town,
     municipal_council_pradeshiya_saba, certificate_division_file_no,
-    land_registry_approved_date, declaration_no, email_address, reg_date,
+    land_registry_approved_date: land_registry_approved_date || null,
+    declaration_no, email_address,
+    reg_date: reg_date || null,
     old_file_no: file_no_old, new_file_no: file_no_new,
     management_corporation_name: name, status,
     private_category_override: categoryOverride,

@@ -8,7 +8,7 @@ module.exports = (sequelize, DataTypes) => {
         autoIncrement: true,
       },
       username: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: false,
         unique: true,
       },
@@ -33,6 +33,14 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
       },
       email: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      phone: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      year: {
         type: DataTypes.TEXT,
         allowNull: true,
       },

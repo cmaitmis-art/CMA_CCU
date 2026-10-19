@@ -1,12 +1,21 @@
-node_modules
+node_modules/
 *.db
 *.db-shm
 *.db-wal
 
-# Environment variables - NEVER commit these
+# Environment variables & secrets - NEVER commit these
 .env
-.env.local
-.env.production
+.env.*
+*.env
+*.env.*
+cpanel env
+temp_test.env
+*.key
+*.pem
+
+# Frontend build distribution
+frontend/dist/
+dist/
 
 # Uploads (user data - don't commit)
 backend/uploads/
@@ -14,6 +23,14 @@ backend/uploads/
 # Temp/debug scripts
 backend/check_db.js
 backend/clear_db.js
+backend/response.json
 
 # Logs
 *.log
+
+# Deployment artifacts & local staging
+dist_cpanel/
+*.zip
+cpanel_deployment/
+CCU_CMA v2/
+db/

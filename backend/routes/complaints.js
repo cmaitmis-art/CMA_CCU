@@ -79,7 +79,7 @@ router.get('/', async (req, res) => {
     }
 
     if (pending_overdue_15 === 'true') {
-      where.status = 'Pending';
+      where.status = { [Op.ne]: 'Closed' };
       const fifteenDaysAgo = new Date();
       fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
       where.received_ccu = { [Op.lt]: fifteenDaysAgo.toISOString().split('T')[0] };
@@ -260,15 +260,36 @@ router.get('/dashboard/pending', async (req, res) => {
 // GET /api/complaints/stats/summary
 router.get('/stats/summary', async (req, res) => {
   try {
-    const [total, pending, open, newStatus, closed] = await Promise.all([
+    const fifteenDaysAgo = new Date();
+    fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
+    const cutoff = fifteenDaysAgo.toISOString().split('T')[0];
+
+    const [total, pending, open, newStatus, closed, overdueCount, categories] = await Promise.all([
       Complaint.count(),
-      Complaint.count({ where: { status: 'Pending' } }),
+      Complaint.count({ where: { status: { [Op.ne]: 'Closed' } } }),
       Complaint.count({ where: { status: 'Open' } }),
       Complaint.count({ where: { status: 'New' } }),
       Complaint.count({ where: { status: 'Closed' } }),
+      Complaint.count({ where: { status: { [Op.ne]: 'Closed' }, received_ccu: { [Op.lt]: cutoff } } }),
+      Complaint.findAll({
+        attributes: [[db.sequelize.fn('DISTINCT', db.sequelize.col('category')), 'category']],
+        where: { category: { [Op.ne]: null } },
+        raw: true,
+      })
     ]);
 
-    res.json({ total, pending, open, new: newStatus, closed });
+    const distinctCats = categories.map(c => c.category).filter(Boolean);
+
+    res.json({
+      total,
+      pending,
+      open,
+      new: newStatus,
+      closed,
+      overdue: overdueCount,
+      totalCategories: distinctCats.length,
+      categories: distinctCats
+    });
   } catch (err) {
     console.error('GET /complaints/stats/summary error:', err.message);
     res.status(500).json({ error: 'Failed to fetch complaint statistics' });

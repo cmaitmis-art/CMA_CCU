@@ -18,10 +18,11 @@ import '../CMAStyles.css';
 import * as XLSX from 'xlsx';
 import HistoryModal from '../components/HistoryModal.jsx';
 import AgmManagementView from './AgmManagementView.jsx';
-import { MONTH_OPTIONS, getYearFilterOptions } from '../utils/filterConstants';
+import { MONTH_OPTIONS, getYearFilterOptions, ZONE_OPTIONS } from '../utils/filterConstants';
 window.XLSX = XLSX;
 import { CMA_LOGO_BASE64 } from '../utils/logoBase64.js';
-import { LETTERHEAD_BASE64 } from '../utils/letterheadBase64.js';
+import { LETTERHEAD_BASE64 } from '../utils/letterHeadBase64.js';
+import RichTextToolbar from '../components/RichTextToolbar.jsx';
 
 import {
     CATEGORY_RATES,
@@ -70,6 +71,7 @@ import {
     coerceDateText,
     formatDisplayDate,
     formatDotDate,
+    getTodayDotDate,
     formatOrdinalDate,
     escapeHtml,
     formatBoolean,
@@ -160,6 +162,24 @@ export default function MCManagementBackend({ currentUser }) {
     const [categoryFilter, setCategoryFilter] = useState(() => {
         return sessionStorage.getItem('cma_mc_categoryFilter') || '';
     });
+    const [zoneFilter, setZoneFilter] = useState(() => {
+        return sessionStorage.getItem('cma_mc_zoneFilter') || '';
+    });
+    const [isZoneOpen, setIsZoneOpen] = useState(false);
+    const [zoneSearch, setZoneSearch] = useState('');
+    const zoneDropdownRef = useRef(null);
+
+    useEffect(() => {
+        function handleClickOutside(e) {
+            if (zoneDropdownRef.current && !zoneDropdownRef.current.contains(e.target)) {
+                setIsZoneOpen(false);
+            }
+        }
+        if (isZoneOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [isZoneOpen]);
 
     const [page, setPage] = useState(1);
     const [isImporting, setIsImporting] = useState(false);
@@ -172,6 +192,7 @@ export default function MCManagementBackend({ currentUser }) {
     });
     const pageSize = viewAll ? 999999 : pageSizeDefault;
     const [totalCount, setTotalCount] = useState(0);
+    const [summaryStats, setSummaryStats] = useState(null);
 
     const [modalOpen, setModalOpen] = useState(false);
     const [activeTab, setActiveTab] = useState('details'); // 'details' | 'checklist'
@@ -207,18 +228,29 @@ export default function MCManagementBackend({ currentUser }) {
         signTitle2: 'Condominium Management Authority',
         toEmail: ''
     });
-    // - Renewal covering letter edit overrides -
+    const ackOverridesRef = useRef(ackOverrides);
+    ackOverridesRef.current = ackOverrides;
+    const [ackDefaultOverrides, setAckDefaultOverrides] = useState(null);
+    const [ackCustomHtml, setAckCustomHtml] = useState(null);
+    const [ackSaved, setAckSaved] = useState(false);
+    const [showAckToolbar, setShowAckToolbar] = useState(true);
+    const [ackRenderKey, setAckRenderKey] = useState(0);
+
     const [rlOverrides, setRlOverrides] = useState({
         refNo: '',
-        date: new Date().toISOString().slice(0, 10),
-        signName: 'Samantha Ampaala',
+        date: getTodayDotDate(),
+        signName: 'Samantha Ampagala',
         signTitle1: 'Assistant General Manager (Customer Care)',
         signTitle2: 'Condominium Management Authority',
     });
+    const rlOverridesRef = useRef(rlOverrides);
+    rlOverridesRef.current = rlOverrides;
     const [rlDefaultOverrides, setRlDefaultOverrides] = useState(null); // for undo
     const [rlLetterModalOpen, setRlLetterModalOpen] = useState(false);
     const [rlLetterRecord, setRlLetterRecord] = useState(null);
     const [rlSaved, setRlSaved] = useState(false);
+    const [letterRenderKey, setLetterRenderKey] = useState(0);
+    const [showRlToolbar, setShowRlToolbar] = useState(true);
 
     // View modal now has extra tabs that replicate the two CMA paper forms exactly
     // (Registration Form + Document Checklist), auto-filled from the saved record.
@@ -329,6 +361,7 @@ export default function MCManagementBackend({ currentUser }) {
             sessionStorage.setItem('cma_mc_yearFilter', yearFilter);
             sessionStorage.setItem('cma_mc_monthFilter', monthFilter);
             sessionStorage.setItem('cma_mc_categoryFilter', categoryFilter);
+            sessionStorage.setItem('cma_mc_zoneFilter', zoneFilter);
             sessionStorage.setItem('cma_mc_viewAll', String(viewAll));
             sessionStorage.setItem('cma_mc_isZoomed', String(isZoomed));
             sessionStorage.setItem('cma_mc_showRenewalPanel', String(showRenewalPanel));
@@ -337,7 +370,7 @@ export default function MCManagementBackend({ currentUser }) {
             sessionStorage.setItem('cma_mc_showPendingApprovalsPanel', String(showPendingApprovalsPanel));
             sessionStorage.setItem('cma_mc_showPendingMCsPanel', String(showPendingMCsPanel));
         } catch (e) { }
-    }, [searchTerm, statusFilter, renewalViseFilter, agmViseFilter, yearFilter, monthFilter, categoryFilter, viewAll, isZoomed, showRenewalPanel, showAgmPanel, showAgmPage, showPendingApprovalsPanel, showPendingMCsPanel]);
+    }, [searchTerm, statusFilter, renewalViseFilter, agmViseFilter, yearFilter, monthFilter, categoryFilter, zoneFilter, viewAll, isZoomed, showRenewalPanel, showAgmPanel, showAgmPage, showPendingApprovalsPanel, showPendingMCsPanel]);
 
     const RENEWAL_WINDOW_DAYS = 365; // TEMPORARY FOR TESTING (was 30): reminder window before the "one year after" renewal due date
     const AGM_WINDOW_DAYS = 30; // reminder window before the AGM date (one month ahead)
@@ -429,12 +462,20 @@ export default function MCManagementBackend({ currentUser }) {
     }, [renewalReminders.length]);
 
     const stats = useMemo(() => {
+        if (summaryStats) {
+            return {
+                total: summaryStats.total ?? totalCount,
+                active: summaryStats.active ?? 0,
+                inactive: summaryStats.non_active ?? 0,
+                pending: summaryStats.pending ?? 0,
+            };
+        }
         const total = totalCount;
         const active = mcs.filter((r) => r.status === 'Active').length;
         const inactive = mcs.filter((r) => r.status === 'Non Active').length;
         const pending = mcs.filter((r) => r.status === 'Pending').length;
         return { total, active, inactive, pending };
-    }, [mcs, totalCount]);
+    }, [summaryStats, mcs, totalCount]);
 
     const filtered = useMemo(() => {
         let items = mcs || [];
@@ -469,6 +510,7 @@ export default function MCManagementBackend({ currentUser }) {
                 status: statusFilter || undefined,
                 renewal_vise: renewalViseFilter || undefined,
                 agm_vise: agmViseFilter || undefined,
+                town: zoneFilter || undefined,
                 q: searchTerm ? searchTerm.trim() : undefined,
                 page: viewAll ? 1 : page,
                 limit: pageSize,
@@ -551,7 +593,7 @@ export default function MCManagementBackend({ currentUser }) {
         };
     }, [mcs]);
 
-    useEffect(() => { setPage(1); }, [statusFilter, renewalViseFilter, agmViseFilter, yearFilter, monthFilter, categoryFilter, searchTerm, viewAll]);
+    useEffect(() => { setPage(1); }, [statusFilter, renewalViseFilter, agmViseFilter, yearFilter, monthFilter, categoryFilter, searchTerm, zoneFilter, viewAll]);
 
     useEffect(() => {
         const handleFilterEvent = (event) => {
@@ -561,6 +603,7 @@ export default function MCManagementBackend({ currentUser }) {
                 setYearFilter('');
                 setMonthFilter('');
                 setCategoryFilter('');
+                setZoneFilter('');
             }
         };
         window.addEventListener('cma:filter-mc', handleFilterEvent);
@@ -570,7 +613,7 @@ export default function MCManagementBackend({ currentUser }) {
     useEffect(() => {
         load();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [statusFilter, renewalViseFilter, agmViseFilter, yearFilter, monthFilter, categoryFilter, searchTerm, page, refreshTick]);
+    }, [statusFilter, renewalViseFilter, agmViseFilter, yearFilter, monthFilter, categoryFilter, searchTerm, zoneFilter, page, refreshTick]);
 
     // Auto-refresh every 30 seconds
     const triggerRefresh = useCallback(() => setRefreshTick(t => t + 1), []);
@@ -589,7 +632,26 @@ export default function MCManagementBackend({ currentUser }) {
     }
 
     function field(key) {
-        return (v) => setFormData((p) => ({ ...p, [key]: v }));
+        return (v) => setFormData((p) => {
+            const next = { ...p, [key]: v };
+            if (key === 'renewal_period') {
+                const rpMatches = String(v || '').match(/\b(19|20)\d{2}\b/g);
+                const rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(v, 10);
+                const currentYear = new Date().getFullYear();
+                if (!isNaN(rpYear)) {
+                    next.renewal_date_vise = rpYear >= currentYear ? 'Active' : 'Non Active';
+                    next.next_renewal_date = `${rpYear}-12-31`;
+                }
+            } else if (key === 'next_agm_date') {
+                if (v) {
+                    const nextD = new Date(v);
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    next.agm_date_vise = (!Number.isNaN(nextD.getTime()) && nextD >= today) ? 'Active' : 'Non Active';
+                }
+            }
+            return next;
+        });
     }
 
     function updateCouncilMember(index, fieldName, value) {
@@ -825,6 +887,10 @@ export default function MCManagementBackend({ currentUser }) {
     // app's own print CSS (position:absolute / overflow:hidden on the modal),
     // which was causing the two pages to overlap instead of paginating cleanly.
     function buildRenewalCoveringLetterHtml(invoice) {
+        const rl = invoice._rlOverrides || {};
+        if (rl.customLetterHtml) {
+            return rl.customLetterHtml;
+        }
         const fmt = (n) => (n != null ? Number(n).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-');
         const year = invoice.period_end ? new Date(invoice.period_end).getFullYear() : new Date().getFullYear();
         const fileNo = escapeHtml(invoice.file_no || invoice.invoice_number || '');
@@ -912,7 +978,6 @@ export default function MCManagementBackend({ currentUser }) {
             }))
         ];
 
-        const rl = invoice._rlOverrides || {};
         const displayRows = (rl.tableRows && rl.tableRows.length) ? rl.tableRows : fallbackTableRows;
 
         const preDisplayRows = displayRows.filter(r => r.isPre);
@@ -957,9 +1022,6 @@ export default function MCManagementBackend({ currentUser }) {
         </tbody>
       </table>` : '';
 
-        const transitionNote = hasPreRows && hasPostRows
-            ? `<p class="ol-para">We wish to inform you that charges have been revised and are applicable per unit basis from 01.03.2023 as follows.</p>`
-            : '';
 
         const postTableHtml = hasPostRows ? `
       <div class="ol-yearline">Period ${postDisplayRows[0].yearLabel}${postDisplayRows[postDisplayRows.length - 1].yearLabel !== postDisplayRows[0].yearLabel ? ` - ${postDisplayRows[postDisplayRows.length - 1].yearLabel}` : ''}</div>
@@ -980,17 +1042,16 @@ export default function MCManagementBackend({ currentUser }) {
       </table>` : '';
 
         const refDisplay = rl.refNo || fileNo;
-        const dateDisplay = rl.date ? formatDotDate(rl.date) : formatDotDate(new Date().toISOString().slice(0, 10));
-        const signName = rl.signName || 'Samantha Ampaala';
+        const dateDisplay = rl.date ? formatDotDate(rl.date) : getTodayDotDate();
+        const rawSignName = rl.signName || 'Samantha Ampagala';
+        const signName = (rawSignName === 'Samantha Ampaala') ? 'Samantha Ampagala' : rawSignName;
         const signTitle1 = rl.signTitle1 || 'Assistant General Manager (Customer Care)';
         const signTitle2 = rl.signTitle2 || 'Condominium Management Authority';
         const bodyParagraph1 = rl.bodyParagraph1 || `The Registration of your Management Corporation has been expired on 31.12.${prevYear}. Therefore, please make arrangements to renew the registration of your Management Corporation up to 31.12.${lastYear}.`;
         const bodyParagraph2 = rl.bodyParagraph2 || `Every management corporation is required to pay the registration fees for the year before 31<sup>st</sup> March ${lastYear}. But since you have failed to pay the said fees so far, I hereby request you to take necessary steps to pay some of <strong>Rs. ${fmt(grandTotal)}</strong> as soon as possible with duly prepared application form (annex-01).`;
 
-        return `
-      <div class="official-letter">
-        <div class="ol-ref"><span contenteditable="true">${escapeHtml(refDisplay)}</span><span contenteditable="true">${dateDisplay}</span></div>
-        <div class="ol-addr" contenteditable="true">
+        const titleHtml = rl.titleHtml || `RENEWAL REGISTRATION OF THE MANAGEMENT CORPORATION FOR YEAR<br/>${periodLabel}`;
+        const recipientHtml = rl.recipientHtml || `
           <div>The Secretary,</div>
           ${(() => {
                 const n = invoice.management_corporation_name || '-';
@@ -1000,19 +1061,30 @@ export default function MCManagementBackend({ currentUser }) {
                 }
                 return `<div>${escapeHtml(n)}</div>`;
             })()}
-          ${addressLines.map((line) => `<div>${escapeHtml(line)}</div>`).join('')}
-        </div>
-        <div class="ol-title" contenteditable="true">RENEWAL REGISTRATION OF THE MANAGEMENT CORPORATION FOR YEAR<br/>${periodLabel}</div>
-        <p class="ol-para" contenteditable="true">${bodyParagraph1}</p>
+          ${addressLines.map((line) => `<div>${escapeHtml(line)}</div>`).join('')}`;
+
+        const transitionNote = (hasPreRows && hasPostRows)
+            ? `<p class="ol-para">${rl.transitionalText || 'We wish to inform you that charges have been revised and are applicable per unit basis from 01.03.2023 as follows.'}</p>`
+            : '';
+        const paymentNote = rl.paymentNote || 'Payment with regard to the above can be paid by cash or cheque in favor of &quot;<strong>Condominium Management Authority</strong>&quot;';
+        const closing1 = rl.closingNote1 || 'Thank You.';
+        const closing2 = rl.closingNote2 || 'Yours Faithfully,';
+
+        return `
+      <div class="official-letter">
+        <div class="ol-ref"><span>${escapeHtml(refDisplay)}</span><span>${dateDisplay}</span></div>
+        <div class="ol-addr">${recipientHtml}</div>
+        <div class="ol-title">${titleHtml}</div>
+        <p class="ol-para">${bodyParagraph1}</p>
         ${preTable}
         ${transitionNote}
         ${postTableHtml}
-        <p class="ol-para" contenteditable="true">${bodyParagraph2}</p>
-        <p class="ol-para" contenteditable="true">Payment with regard to the above can be paid by cash or cheque in favor of &quot;<strong>Condominium Management Authority</strong>&quot;</p>
+        <p class="ol-para">${bodyParagraph2}</p>
+        <p class="ol-para">${paymentNote}</p>
         <div class="ol-footer" style="page-break-inside: avoid;">
-          <p class="ol-para" contenteditable="true">Thank You.</p>
-          <p class="ol-para" contenteditable="true">Yours Faithfully,</p>
-          <div class="ol-sign" contenteditable="true">
+          <p class="ol-para">${closing1}</p>
+          <p class="ol-para">${closing2}</p>
+          <div class="ol-sign">
             <div class="ol-sign-space"></div>
             <div><strong>${escapeHtml(signName)}</strong></div>
             <div><strong>${escapeHtml(signTitle1)}</strong></div>
@@ -1085,6 +1157,126 @@ export default function MCManagementBackend({ currentUser }) {
       </div>`;
     }
 
+    function buildRegistrationReceiptDocumentHtml(invoice) {
+        if (!invoice) return '';
+        const fmt = (n) => (n != null ? Number(n).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-');
+        const periodStart = formatDisplayDate(invoice.period_start);
+        const periodEnd = formatDisplayDate(invoice.period_end);
+        const monthsCharged = computePeriodMonths(invoice.period_start, invoice.period_end);
+        const units = invoice.units ?? invoice.residential ?? invoice.residential_units ?? '';
+        const fileNo = escapeHtml(invoice.file_no || invoice.new_file_no || invoice.old_file_no || invoice.invoice_number || '-');
+        const category = escapeHtml(invoice.category || '-');
+        const feeRate = invoice.fee_rate_per_unit != null ? Number(invoice.fee_rate_per_unit).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-';
+        const addr = [invoice.management_corporation_name, invoice.plan_no, invoice.address].filter(Boolean).map(escapeHtml).join(' | ') || '-';
+
+        return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title></title>
+  <style>
+    @page { size: A4; margin: 0 !important; }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #fff;
+      font-family: 'Times New Roman', serif;
+      color: #000;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .print-receipt {
+      width: 100%;
+      max-width: 210mm;
+      margin: 0;
+      padding: 15mm 0.8in 15mm 1.2in;
+      box-sizing: border-box;
+      font-size: 14px;
+      line-height: 1.5;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    .print-receipt .rc-head { text-align: center; margin-bottom: 18px; }
+    .print-receipt .rc-head .rc-logo img { width: 85px; height: auto; margin-bottom: 10px; }
+    .print-receipt .rc-head .rc-title { font-size: 18px; font-weight: 700; }
+    .print-receipt .rc-head .rc-sub { font-size: 14px; }
+    .print-receipt .rc-topline { text-align: right; font-size: 14px; margin-bottom: 8px; }
+    .print-receipt .rc-regno { font-weight: 700; }
+    .print-receipt .rc-row { margin: 10px 0; display: flex; align-items: center; gap: 8px; }
+    .print-receipt .rc-fill-label { white-space: nowrap; }
+    .print-receipt .rc-fill-line { flex: 1; border-bottom: 1px dotted #666; height: 1px; margin-top: 14px; }
+    .print-receipt .rc-checkline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 12px 0; padding: 10px 0; border-top: 1px solid #aaa; border-bottom: 1px solid #aaa; }
+    .print-receipt .rc-box { display: inline-block; width: 16px; height: 16px; border: 1px solid #111; text-align: center; line-height: 16px; font-size: 12px; margin-right: 8px; }
+    .print-receipt table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    .print-receipt td { padding: 8px 5px; border-bottom: 1px dotted #666; vertical-align: top; }
+    .print-receipt .rc-label { font-weight: 700; width: 48%; }
+    .print-receipt .rc-total td { border-top: 2px solid #111; font-weight: 700; font-size: 15px; }
+    .print-receipt .rc-sign { display: flex; justify-content: space-between; margin-top: 75px; page-break-inside: avoid; break-inside: avoid; }
+    .print-receipt .rc-sign div { border-top: 1px solid #111; padding-top: 5px; width: 45%; text-align: center; }
+
+    @media print {
+      @page { size: A4; margin: 0 !important; }
+      html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        height: 100% !important;
+        overflow: hidden !important;
+      }
+      .print-receipt {
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        page-break-after: avoid !important;
+        break-after: avoid !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-receipt">
+    <div class="rc-topline"><span class="rc-regno">No. ${fileNo}</span></div>
+    <div class="rc-head">
+      <div class="rc-logo"><img src="${CMA_LOGO_BASE64}" alt="CMA Logo" /></div>
+      <div class="rc-title">CONDOMINIUM MANAGEMENT AUTHORITY</div>
+      <div class="rc-sub">Customer Care Division / Legal Division</div>
+    </div>
+    <div class="rc-row"><span class="rc-fill-label">DGM Finance / Shroff</span><span class="rc-fill-line"></span></div>
+    <div class="rc-checkline">
+      <span>Registration of Management Corporation</span><span class="rc-box">&#10003;</span>
+      <span>/ Renewal</span><span class="rc-box"></span>
+      <span>/ Application Fee</span><span class="rc-box"></span>
+      <span>/ Photocopy Charges</span><span class="rc-box"></span>
+      <span>/ Others</span><span class="rc-box"></span>
+    </div>
+    <table>
+      <tbody>
+        <tr><td class="rc-label">File No</td><td>${fileNo}</td></tr>
+        <tr><td class="rc-label">Name of the MC &amp; Address</td><td>${addr}</td></tr>
+        <tr><td class="rc-label">Period</td><td>${periodStart} to ${periodEnd}</td></tr>
+        <tr><td class="rc-label">Category</td><td>${category}</td></tr>
+        <tr><td class="rc-label">Number of Parcels (Units)</td><td>${units}</td></tr>
+        <tr><td class="rc-label">Period (months charged)</td><td>${monthsCharged}</td></tr>
+        <tr><td class="rc-label">Fee Rs. (Rate ${feeRate} / 12 - ${monthsCharged || '-'} months - ${units || '-'} units)</td><td>${fmt(invoice.fee_amount)}</td></tr>
+        <tr><td class="rc-label">Other Tax - SSCL (${SSCL_RATE * 100}%)</td><td>${fmt(invoice.sscl_amount)}</td></tr>
+        <tr><td class="rc-label">VAT (${VAT_RATE * 100}%)</td><td>${fmt(invoice.vat_amount)}</td></tr>
+        <tr class="rc-total"><td>Total Amount Rs.</td><td>${fmt(invoice.total_amount)}</td></tr>
+      </tbody>
+    </table>
+    <div class="rc-row" style="margin-top:14px">
+      <span>Please accept Rs. ____________________ (Cash / Cheque) Cheque No. ____________________</span>
+    </div>
+    <div class="rc-row">
+      <span>Cheque Date ____________________ Branch ____________________ from the above MC.</span>
+    </div>
+    <div class="rc-sign">
+      <div>Authorized Signature</div>
+      <div>Date</div>
+    </div>
+  </div>
+</body>
+</html>`;
+    }
+
     function buildAcknowledgementLetterHtml(mc) {
         if (!mc) return '';
         const fmt = (n) => (n != null ? Number(n).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-');
@@ -1150,24 +1342,26 @@ export default function MCManagementBackend({ currentUser }) {
 <meta charset="utf-8" />
 <title>Acknowledgement Letter - ${escapeHtml(mc.acknowledgement_no || '')}</title>
 <style>
-  @page { size: A4; margin: 0; }
+  @page { size: A4; margin: 0 !important; }
   * { box-sizing: border-box; }
   body { margin: 0; padding: 0; font-family: 'Times New Roman', serif; color: #111; background: #fff; }
   
   .doc-page { 
-    padding: 15mm; 
+    padding: 0; 
+    margin: 0;
     min-height: 100vh;
   }
   
   /* - Acknowledgement Letter - */
   .ack-letter { 
-    max-width: 680px; 
-    margin: 0 auto; 
-    padding: 0 10px; 
+    width: 100%;
+    max-width: 210mm;
+    margin: 0; 
+    padding: 2.7in 0.8in 0.5in 1.2in; 
+    box-sizing: border-box;
     font-family: 'Times New Roman', serif; 
     font-size: 16px; 
     line-height: 1.6;
-    padding-top: 2.2in; /* Large top padding for letterhead */
   }
   .ack-letter .ack-ref { display: flex; justify-content: space-between; margin-bottom: 25px; }
   .ack-letter .ack-addr { margin-bottom: 25px; }
@@ -1205,7 +1399,7 @@ export default function MCManagementBackend({ currentUser }) {
 <meta charset="utf-8" />
 <title>Renewal Document - ${escapeHtml(invoice.invoice_number || '')}</title>
 <style>
-  @page { size: A4; margin: 0; }
+  @page { size: A4; margin: 0 !important; }
   * { box-sizing: border-box; }
   body { margin: 0; padding: 0; font-family: 'Times New Roman', serif; color: #111; background: #fff; }
 
@@ -1239,7 +1433,7 @@ export default function MCManagementBackend({ currentUser }) {
   [contenteditable]:hover:not(:focus) { background: rgba(79,110,247,0.06); border-radius: 2px; }
 
   @media print {
-    @page { margin: 0; }
+    @page { size: A4; margin: 0 !important; }
     .edit-toolbar { display: none !important; }
     body { margin: 0; padding: 0; }
     [contenteditable] { outline: none !important; background: transparent !important; }
@@ -1247,36 +1441,88 @@ export default function MCManagementBackend({ currentUser }) {
       page-break-after: always; 
       break-after: page; 
       display: block; 
-      padding-bottom: 5mm !important; /* give just a little bottom padding */
-      margin-bottom: 0 !important;
+      padding-bottom: 0 !important;
+      margin: 0 !important;
     }
     .doc-page.letter-page {
-      padding-top: 2.2in !important;
+      margin: 0 !important;
+      margin-top: 0 !important;
+      padding-top: 2.7in !important;
+      padding-left: 1.2in !important;
+      padding-right: 0.8in !important;
+      padding-bottom: 0 !important;
+      box-sizing: border-box !important;
+    }
+    .doc-page.doc-page-receipt {
+      margin-top: 0 !important;
+      padding-top: 15mm !important;
+      padding-left: 1.2in !important;
+      padding-right: 0.8in !important;
+      box-sizing: border-box !important;
     }
     .doc-page:last-child {
       page-break-after: auto;
       break-after: auto;
+    }    .official-letter { 
+      font-size: 15px; 
+      line-height: 1.38; 
+      padding: 0 !important;
+      margin: 0 !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      color: #000;
     }
-    .official-letter { font-size: 16px; line-height: 1.25; padding: 0 5px; }
-    .official-letter .ol-ref, .official-letter .ol-addr { margin-bottom: 2px; }
-    .official-letter .ol-addr div { margin: 0; }
-    .official-letter .ol-title { margin: 2px 0; font-size: 16px; }
-    .official-letter .ol-para { margin: 4px 0; }
-    .official-letter table.ol-table { font-size: 14px; margin: 4px 0; }
-    .official-letter table.ol-table th, .official-letter table.ol-table td { padding: 2px 4px; }
-    .official-letter .ol-sign { margin-top: 4px; }
-    .official-letter .ol-sign-space { height: 10px; }
+    .official-letter .ol-ref { 
+      display: flex; 
+      justify-content: space-between; 
+      font-weight: normal !important; 
+      margin-bottom: 14px; 
+    }
+    .official-letter .ol-addr { margin-bottom: 14px; }
+    .official-letter .ol-addr div { margin: 1.5px 0; }
+    .official-letter .ol-title { margin: 12px 0 10px; font-size: 15px; font-weight: 700; text-decoration: underline; text-align: left; }
+    .official-letter .ol-para { margin: 8px 0; font-size: 15px; line-height: 1.38; text-align: justify; }
+    .official-letter .ol-yearline { font-weight: 700; margin: 6px 0 3px; font-size: 14px; }
+    .official-letter table.ol-table { font-size: 12.5px; margin: 4px 0 10px; width: 100%; border-collapse: collapse; }
+    .official-letter table.ol-table th, .official-letter table.ol-table td { padding: 4.5px 6px; border: 1px solid #000; text-align: center; vertical-align: middle; }
+    .official-letter table.ol-table th { font-weight: 700; background: #fff; }
+    .official-letter table.ol-table td:first-child { text-align: left; font-weight: 600; }
+    .official-letter table.ol-table .ol-total-row td { font-weight: 700; background: #f9f9f9; }
+    .official-letter table.ol-table .ol-total-row td:first-child { text-align: center; }
+    .official-letter .ol-sign { margin-top: 15px; font-size: 15px; page-break-inside: avoid; }
+    .official-letter .ol-sign div { margin: 1px 0; }
+    .official-letter .ol-sign-space { height: 35px; }
+
+    /* Graceful compact fallback if needed */
+    .official-letter.compact-letter {
+      font-size: 14px !important;
+      line-height: 1.28 !important;
+    }
+    .official-letter.compact-letter .ol-ref { margin-bottom: 8px !important; }
+    .official-letter.compact-letter .ol-addr { margin-bottom: 8px !important; }
+    .official-letter.compact-letter .ol-addr div { margin: 1px 0 !important; }
+    .official-letter.compact-letter .ol-title { margin: 8px 0 !important; font-size: 14px !important; }
+    .official-letter.compact-letter .ol-yearline { margin: 4px 0 2px !important; font-size: 13px !important; }
+    .official-letter.compact-letter .ol-para { margin: 5px 0 !important; font-size: 14px !important; line-height: 1.28 !important; }
+    .official-letter.compact-letter table.ol-table { font-size: 11.5px !important; margin: 2px 0 6px !important; }
+    .official-letter.compact-letter table.ol-table th,
+    .official-letter.compact-letter table.ol-table td { padding: 2.5px 4px !important; }
+    .official-letter.compact-letter .ol-sign { margin-top: 10px !important; font-size: 14px !important; }
+    .official-letter.compact-letter .ol-sign-space { height: 20px !important; }
   }
 
   .doc-page { 
     padding: 15mm; 
-    position: relative;
+    position: relative; 
     page-break-after: always; 
     break-after: page; 
   }
   .doc-page.letter-page {
-    padding-top: 2.2in;
-    margin-top: 52px;
+    padding-top: 2.7in;
+    padding-left: 1.2in;
+    padding-right: 0.8in;
+    margin: 0 auto;
+    box-sizing: border-box;
   }
   .doc-page:last-child {
     page-break-after: auto;
@@ -1284,25 +1530,43 @@ export default function MCManagementBackend({ currentUser }) {
   }
   .doc-page-receipt {
     margin-top: 0;
+    padding-left: 1.2in;
+    padding-right: 0.8in;
+    box-sizing: border-box;
   }
 
   /* - Covering Letter - */
-  .official-letter { max-width: 700px; margin: 0 auto; padding: 10px; font-family: 'Times New Roman', serif; font-size: 16px; line-height: 1.4; }
-  .official-letter .ol-ref { display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 12px; }
-  .official-letter .ol-addr { margin-bottom: 12px; }
-  .official-letter .ol-addr div { margin: 2px 0; }
-  .official-letter .ol-title { text-align: left; font-weight: 700; text-decoration: underline; margin: 12px 0; }
-  .official-letter .ol-yearline { font-weight: 700; margin: 6px 0; }
+  .official-letter { max-width: 100%; margin: 0 auto; padding: 0; font-family: 'Times New Roman', serif; font-size: 15px; line-height: 1.38; color: #111; }
+  .official-letter .ol-ref { display: flex; justify-content: space-between; font-weight: normal; margin-bottom: 14px; }
+  .official-letter .ol-addr { margin-bottom: 14px; }
+  .official-letter .ol-addr div { margin: 1.5px 0; }
+  .official-letter .ol-title { text-align: left; font-weight: 700; text-decoration: underline; margin: 12px 0 10px; }
+  .official-letter .ol-yearline { font-weight: 700; margin: 6px 0 3px; font-size: 14px; }
   .official-letter .ol-section { font-weight: 700; margin: 10px 0 2px; font-size: 13px; text-indent: 0; }
   .official-letter .ol-para { margin: 8px 0; text-align: justify; }
-  .official-letter table.ol-table { width: 100%; border-collapse: collapse; margin: 2px 0 10px; font-size: 13px; }
-  .official-letter table.ol-table th, .official-letter table.ol-table td { border: 1px solid #000; padding: 4px 6px; text-align: center; vertical-align: middle; }
+  .official-letter table.ol-table { width: 100%; border-collapse: collapse; margin: 4px 0 10px; font-size: 12.5px; }
+  .official-letter table.ol-table th, .official-letter table.ol-table td { border: 1px solid #000; padding: 4.5px 6px; text-align: center; vertical-align: middle; }
   .official-letter table.ol-table th { font-weight: 700; background: #fff; }
   .official-letter table.ol-table td:first-child { text-align: left; font-weight: 600; }
   .official-letter table.ol-table .ol-total-row td { font-weight: 700; background: #f9f9f9; }
   .official-letter table.ol-table .ol-total-row td:first-child { text-align: center; }
   .official-letter .ol-sign { margin-top: 15px; page-break-inside: avoid; }
+  .official-letter .ol-sign div { margin: 1px 0; }
   .official-letter .ol-sign-space { height: 35px; }
+
+  /* Compact mode fallback */
+  .official-letter.compact-letter { font-size: 14px; line-height: 1.28; }
+  .official-letter.compact-letter .ol-ref { margin-bottom: 8px; font-weight: normal; }
+  .official-letter.compact-letter .ol-addr { margin-bottom: 8px; }
+  .official-letter.compact-letter .ol-addr div { margin: 1px 0; line-height: 1.28; }
+  .official-letter.compact-letter .ol-title { margin: 8px 0; font-size: 14px; line-height: 1.28; }
+  .official-letter.compact-letter .ol-yearline { margin: 4px 0 2px; font-size: 13px; }
+  .official-letter.compact-letter .ol-section { margin: 4px 0 2px; font-size: 12px; }
+  .official-letter.compact-letter .ol-para { margin: 5px 0; font-size: 14px; line-height: 1.28; }
+  .official-letter.compact-letter table.ol-table { font-size: 11.5px; margin: 2px 0 6px; }
+  .official-letter.compact-letter table.ol-table th, .official-letter.compact-letter table.ol-table td { padding: 2.5px 4px; }
+  .official-letter.compact-letter .ol-sign { margin-top: 10px; font-size: 14px; line-height: 1.28; }
+  .official-letter.compact-letter .ol-sign-space { height: 20px; }
 
   /* - Receipt - */
   .print-receipt { max-width: 680px; margin: 0 auto; padding: 10px; font-size: 14px; line-height: 1.5; }
@@ -1346,25 +1610,42 @@ export default function MCManagementBackend({ currentUser }) {
   <div class="doc-page doc-page-receipt">${receiptHtml}</div>
   <script>
     window.addEventListener('load', function() {
-      // Auto-adjust font size to ensure it fits on one page
-      var letter = document.querySelector('.official-letter');
-      if (letter) {
-        var maxH = 750; // Safe max height that fits even if Chrome "Default" margins are active
-        var currentSize = 16;
-        while(letter.offsetHeight > maxH && currentSize > 12) {
-          currentSize -= 0.2;
-          letter.style.fontSize = currentSize + 'px';
-          
-          var title = letter.querySelector('.ol-title');
-          if (title) title.style.fontSize = currentSize + 'px';
-          
-          var tables = letter.querySelectorAll('.ol-table');
-          tables.forEach(function(t) {
-            t.style.fontSize = (currentSize - 2) + 'px';
-          });
-        }
-      }
+      try {
+        var letter = document.querySelector('.official-letter');
+        if (letter) {
+          // Available height on A4: 297mm (~1122.5px) - 2.7in top padding (~259.2px) - 45px safety bottom margin = ~818px
+          var maxH = 818;
+          var signSpace = letter.querySelector('.ol-sign-space');
 
+          // Only adjust if content actually overflows the single page height
+          if (letter.offsetHeight > maxH && signSpace) {
+            signSpace.style.height = '20px';
+          }
+          var currentSize = parseFloat(window.getComputedStyle(letter).fontSize) || 15;
+          while (letter.offsetHeight > maxH && currentSize > 11) {
+            currentSize -= 0.2;
+            letter.style.setProperty('font-size', currentSize + 'px', 'important');
+            letter.style.setProperty('line-height', (currentSize < 13 ? '1.22' : '1.28'), 'important');
+            var title = letter.querySelector('.ol-title');
+            if (title) title.style.setProperty('font-size', currentSize + 'px', 'important');
+            var paras = letter.querySelectorAll('.ol-para');
+            for (var p = 0; p < paras.length; p++) {
+              paras[p].style.setProperty('margin', (currentSize < 13 ? '4px 0' : '6px 0'), 'important');
+            }
+            var tables = letter.querySelectorAll('.ol-table');
+            for (var i = 0; i < tables.length; i++) {
+              tables[i].style.setProperty('font-size', Math.max(10, currentSize - 2.5) + 'px', 'important');
+              tables[i].style.setProperty('margin', '2px 0 6px', 'important');
+              var cells = tables[i].querySelectorAll('th, td');
+              for (var c = 0; c < cells.length; c++) {
+                cells[c].style.setProperty('padding', '2.5px 4px', 'important');
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error(err);
+      }
       setTimeout(function() {
         window.focus();
         // window.print() is handled by the outer component
@@ -1376,15 +1657,22 @@ export default function MCManagementBackend({ currentUser }) {
     }
 
     // ── Renewal Letter helpers ──────────────────────────────────────────────
-    function getRlStorageKey(invoice) {
-        return `rl_overrides_${invoice?.invoice_number || invoice?.file_no || 'default'}`;
+    function getRlStorageKey(record) {
+        const id = record?.file_no || record?.new_file_no || record?.old_file_no || record?.id || record?.invoice_number || 'default';
+        return `rl_overrides_${id}`;
     }
 
     function loadRlOverrides(invoice) {
         try {
             const key = getRlStorageKey(invoice);
             const saved = localStorage.getItem(key);
-            if (saved) return JSON.parse(saved);
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (parsed && parsed.signName === 'Samantha Ampaala') {
+                    parsed.signName = 'Samantha Ampagala';
+                }
+                return parsed;
+            }
         } catch { }
         return null;
     }
@@ -1396,10 +1684,38 @@ export default function MCManagementBackend({ currentUser }) {
         } catch { }
     }
 
+    // ── Acknowledgement Letter helpers ──────────────────────────────────────────────
+    function getAckStorageKey(record) {
+        const id = record?.file_no || record?.new_file_no || record?.old_file_no || record?.id || record?.acknowledgement_no || 'default';
+        return `ack_overrides_${id}`;
+    }
+
+    function loadAckOverrides(record) {
+        try {
+            const key = getAckStorageKey(record);
+            const saved = localStorage.getItem(key);
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (parsed && parsed.signName === 'Samantha Ampaala') {
+                    parsed.signName = 'Samantha Ampagala';
+                }
+                return parsed;
+            }
+        } catch { }
+        return null;
+    }
+
+    function saveAckOverrides(record, overrides) {
+        try {
+            const key = getAckStorageKey(record);
+            localStorage.setItem(key, JSON.stringify(overrides));
+        } catch { }
+    }
+
     function openRlLetterModal(invoice) {
         if (!invoice) return;
         const saved = loadRlOverrides(invoice);
-        const fileNo = invoice.file_no || invoice.invoice_number || '';
+        const fileNo = invoice.file_no || invoice.new_file_no || invoice.old_file_no || invoice.invoice_number || '';
 
         // Calculate years & total for default paragraphs
         const year = invoice.period_end ? new Date(invoice.period_end).getFullYear() : new Date().getFullYear();
@@ -1465,27 +1781,78 @@ export default function MCManagementBackend({ currentUser }) {
             return [...preGroups, ...postGroups];
         };
 
-        // Always recalculate tableRows fresh from the MC data so the correct
-        // fee logic is applied, ignoring any old cached grouping format.
         const freshTableRows = buildGroups(calcRows);
-        const finalOverrides = {
+        const todayDot = getTodayDotDate();
+
+        const addressLines = String(invoice.address || '')
+            .split(/\r?\n|,/)
+            .map((l) => l.trim())
+            .filter(Boolean);
+        const periodLabel = firstYear === lastYear
+            ? `(01/01/${lastYear} - 31/12/${lastYear})`
+            : `(01/01/${firstYear} - 31/12/${lastYear})`;
+        const defaultTitleHtml = `<strong>RENEWAL REGISTRATION OF THE MANAGEMENT CORPORATION FOR YEAR</strong><br/>${periodLabel}`;
+        const defaultRecipientHtml = `<div>The Secretary,</div>` +
+            (() => {
+                const n = invoice.management_corporation_name || '-';
+                if (n.includes(' - ')) {
+                    const idx = n.indexOf(' - ');
+                    return `<div>${escapeHtml(n.substring(0, idx))}</div><div>${escapeHtml(n.substring(idx + 3))}</div>`;
+                }
+                return `<div>${escapeHtml(n)}</div>`;
+            })() +
+            addressLines.map(line => `<div>${escapeHtml(line)}</div>`).join('');
+
+        const preDisplayRows = freshTableRows.filter(r => r.isPre);
+        const postDisplayRows = freshTableRows.filter(r => !r.isPre);
+
+        const defaultPrePeriodHeading = preDisplayRows.length > 0
+            ? `Period ${preDisplayRows[0].yearLabel}${preDisplayRows[preDisplayRows.length - 1].yearLabel !== preDisplayRows[0].yearLabel ? ` - ${preDisplayRows[preDisplayRows.length - 1].yearLabel}` : ''}`
+            : '';
+        const defaultPostPeriodHeading = postDisplayRows.length > 0
+            ? `Period ${postDisplayRows[0].yearLabel}${postDisplayRows[postDisplayRows.length - 1].yearLabel !== postDisplayRows[0].yearLabel ? ` - ${postDisplayRows[postDisplayRows.length - 1].yearLabel}` : ''}`
+            : '';
+        const defaultTransitionalText = 'We wish to inform you that charges have been revised and are applicable per unit basis from 01.03.2023 as follows.';
+        const defaultPaymentNote = 'Payment with regard to the above can be paid by cash or cheque in favor of &quot;<strong>Condominium Management Authority</strong>&quot;';
+
+        // Clean pristine defaults snapshot for Undo
+        const cleanDefaults = {
             refNo: fileNo,
-            date: new Date().toISOString().slice(0, 10),
-            signName: 'Samantha Ampaala',
+            date: todayDot,
+            recipientHtml: defaultRecipientHtml,
+            titleHtml: defaultTitleHtml,
+            bodyParagraph1: defaultBodyParagraph1,
+            prePeriodHeading: defaultPrePeriodHeading,
+            tableRows: freshTableRows,
+            transitionalText: defaultTransitionalText,
+            postPeriodHeading: defaultPostPeriodHeading,
+            bodyParagraph2: defaultBodyParagraph2,
+            paymentNote: defaultPaymentNote,
+            closingNote1: 'Thank You.',
+            closingNote2: 'Yours Faithfully,',
+            signName: 'Samantha Ampagala',
             signTitle1: 'Assistant General Manager (Customer Care)',
             signTitle2: 'Condominium Management Authority',
-            bodyParagraph1: defaultBodyParagraph1,
-            bodyParagraph2: defaultBodyParagraph2,
-            ...saved,
-            tableRows: freshTableRows,  // always override with fresh per-year rows
         };
-        if (!finalOverrides.bodyParagraph1) finalOverrides.bodyParagraph1 = defaultBodyParagraph1;
-        if (!finalOverrides.bodyParagraph2) finalOverrides.bodyParagraph2 = defaultBodyParagraph2;
 
-        setRlOverrides(finalOverrides);
-        setRlDefaultOverrides(finalOverrides); // snapshot for undo
-        setRlSaved(false);
+        // Active overrides: merge saved, but ensure date is today's current date unless explicitly edited
+        const activeOverrides = saved ? { ...cleanDefaults, ...saved } : { ...cleanDefaults };
+        if (!saved?.isManualDate || !saved?.date) {
+            activeOverrides.date = todayDot;
+        }
+        if (saved?.tableRows && saved.tableRows.length > 0) {
+            activeOverrides.tableRows = saved.tableRows;
+        } else {
+            activeOverrides.tableRows = freshTableRows;
+        }
+
+        rlOverridesRef.current = activeOverrides;
+        setRlDefaultOverrides(cleanDefaults);
+        setRlOverrides(activeOverrides);
+        setRlSaved(!!saved);
         setRlLetterRecord(invoice);
+        setShowRlToolbar(false);
+        setLetterRenderKey(prev => prev + 1);
         setRlLetterModalOpen(true);
     }
 
@@ -1541,12 +1908,29 @@ export default function MCManagementBackend({ currentUser }) {
             return;
         }
         setPrintingInvoice(true);
-        document.body.classList.add('receipt-print-mode');
+        const html = buildRegistrationReceiptDocumentHtml(invoiceRecord);
+        const iframe = document.createElement('iframe');
+        iframe.style.position = 'fixed';
+        iframe.style.right = '200vw'; // push completely off-screen
+        iframe.style.bottom = '0';
+        iframe.style.width = '210mm'; // Standard A4 width
+        iframe.style.height = '297mm'; // Standard A4 height
+        iframe.style.border = '0';
+        document.body.appendChild(iframe);
+
+        const doc = iframe.contentWindow.document;
+        doc.open();
+        doc.write(html);
+        doc.close();
+
+        iframe.contentWindow.focus();
         setTimeout(() => {
-            window.print();
+            iframe.contentWindow.print();
             setPrintingInvoice(false);
-            document.body.classList.remove('receipt-print-mode');
-        }, 120);
+            setTimeout(() => {
+                document.body.removeChild(iframe);
+            }, 1000);
+        }, 500);
     }
 
     useEffect(() => {
@@ -1580,143 +1964,321 @@ export default function MCManagementBackend({ currentUser }) {
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Print Document</title>
+  <title></title>
   <style>
-    @page { size: A4; margin: 8mm 12mm 8mm 12mm; }
+    @page {
+      size: A4 portrait;
+      margin: 0 !important;
+    }
+    @media print {
+      @page {
+        size: A4 portrait;
+        margin: 0 !important;
+      }
+    }
     *, *::before, *::after { box-sizing: border-box; }
     html, body {
       margin: 0; padding: 0;
       font-family: 'Times New Roman', Times, serif;
       font-size: 12pt;
-      line-height: 1.25;
+      line-height: 1.26;
       color: #000;
       background: #fff;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
     }
 
-    /* form page breaks */
-    .form-page { page-break-after: always; }
-    .form-page:last-child { page-break-after: avoid; }
-    .print-bundle { display: block; }
+    /* form page breaks & padding (1.2in left margin, 15mm right margin, 8mm top & bottom) */
+    .form-page {
+      page-break-after: always;
+      page-break-inside: avoid;
+      break-inside: avoid;
+      box-sizing: border-box;
+      padding: 8mm 15mm 8mm 1.2in;
+      width: 100%;
+    }
+    .form-page:last-child {
+      page-break-after: avoid;
+    }
+    .print-bundle { display: block; width: 100%; }
 
-    /* Registration form wrapper */
+    /* Base form styles */
     .official-form-print {
       font-family: 'Times New Roman', Times, serif;
-      font-size: 12pt;
       color: #000;
-      padding-top: 8pt;
+      padding: 8mm 15mm 8mm 1.2in;
+      box-sizing: border-box;
+      width: 100%;
+    }
+    .form-page .official-form-print {
+      padding: 0 !important;
     }
 
-    /* Logo */
-    .of-logo { text-align: center; margin-bottom: 2pt; }
-    .of-logo img { width: 46pt; height: auto; }
-
-    /* Titles */
-    .of-title {
+    /* ─── 1. REGISTRATION FORM (Full Page, Natural Proportions) ─── */
+    .of-registration-page {
+      font-size: 11.5pt;
+      line-height: 1.26;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    .of-registration-page .of-logo { text-align: center; margin-bottom: 2pt; }
+    .of-registration-page .of-logo img { width: 46pt; height: auto; }
+    .of-registration-page .of-title {
       text-align: center;
       font-size: 12.5pt;
       font-weight: bold;
       letter-spacing: 0.2pt;
       margin: 0;
     }
-    .of-subtitle {
+    .of-registration-page .of-subtitle {
       text-align: center;
       font-size: 11.5pt;
       font-weight: bold;
       text-decoration: none;
-      margin: 1pt 0 8pt;
+      margin: 2pt 0 8pt;
     }
-
-    /* Rows */
-    .of-row {
+    .of-registration-page .of-row {
       display: flex;
       align-items: baseline;
       flex-wrap: wrap;
       gap: 2pt;
-      margin: 2pt 0;
-      font-size: 12pt;
+      margin: 2.5pt 0;
+      font-size: 11.5pt;
+      line-height: 1.26;
     }
-    .of-num { white-space: nowrap; font-weight: 600; }
-    .of-fill {
+    .of-registration-page .of-num {
+      white-space: nowrap;
+      font-weight: 600;
+    }
+    .of-registration-page .of-fill {
       flex: 1;
       min-width: 50pt;
       border-bottom: 1pt dotted #444;
       min-height: 13pt;
-      padding-left: 2pt;
+      padding-left: 3pt;
     }
-
-    /* Checkbox */
-    .of-box {
+    .of-registration-page .of-box {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 10pt;
-      height: 10pt;
+      width: 10.5pt;
+      height: 10.5pt;
       border: 1pt solid #000;
       font-size: 8pt;
       font-weight: bold;
-      margin: 0 2pt;
+      margin: 0 2.5pt;
       flex-shrink: 0;
     }
-
-    /* Section title */
-    .of-section-title {
+    .of-registration-page .of-section-title {
       font-weight: bold;
-      font-size: 12pt;
-      margin: 5pt 0 1pt;
+      font-size: 11.5pt;
+      margin: 5.5pt 0 1.5pt;
     }
-
-    /* Grid for checkboxes */
-    .of-grid2 {
+    .of-registration-page .of-grid2 {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 1pt 12pt;
+      gap: 1.5pt 12pt;
       margin-left: 4pt;
     }
-    .of-checkitem {
+    .of-registration-page .of-checkitem {
       display: flex;
       align-items: center;
       gap: 3pt;
-      font-size: 12pt;
-      line-height: 1.25;
+      font-size: 11.5pt;
+      line-height: 1.26;
     }
-
-    /* Table */
-    .of-table {
+    .of-registration-page .of-table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 11pt;
+      font-size: 10.5pt;
       margin-top: 3pt;
     }
-    .of-table th, .of-table td {
+    .of-registration-page .of-table th,
+    .of-registration-page .of-table td {
       border: 0.75pt solid #555;
-      padding: 2pt 4pt;
+      padding: 2.5pt 4pt;
       text-align: left;
       vertical-align: top;
     }
-    .of-table th { background: #f4f4f4; font-weight: bold; }
-
-    /* Signature line */
-    .of-sign {
+    .of-registration-page .of-table th { background: #f4f4f4; font-weight: bold; }
+    .of-registration-page .of-sign {
       display: flex;
       justify-content: space-between;
-      margin-top: 12pt;
+      margin-top: 18pt;
       font-size: 11pt;
       page-break-inside: avoid;
+      break-inside: avoid;
     }
-    .of-sign div {
+    .of-registration-page .of-sign div {
       border-top: 1pt solid #000;
       padding-top: 4pt;
       width: 44%;
       text-align: center;
     }
 
-    /* Checklist container */
-    .checklist-print-container {
-      font-family: 'Times New Roman', Times, serif;
+    /* ─── DYNAMIC COUNCIL MEMBER AUTO-ADJUSTMENT ─── */
+    /* When 3-4 council members are present */
+    .of-registration-page.council-compact {
+      font-size: 10.5pt;
+      line-height: 1.20;
+    }
+    .of-registration-page.council-compact .of-logo { margin-bottom: 1pt; }
+    .of-registration-page.council-compact .of-logo img { width: 40pt; }
+    .of-registration-page.council-compact .of-title { font-size: 11.5pt; }
+    .of-registration-page.council-compact .of-subtitle { font-size: 10.5pt; margin: 1pt 0 5pt; }
+    .of-registration-page.council-compact .of-row { font-size: 10.5pt; margin: 1.8pt 0; gap: 2pt; line-height: 1.20; }
+    .of-registration-page.council-compact .of-section-title { font-size: 10.5pt; margin: 3.5pt 0 1pt; }
+    .of-registration-page.council-compact .of-checkitem { font-size: 10.5pt; line-height: 1.20; }
+    .of-registration-page.council-compact .of-table { font-size: 9.5pt; margin-top: 2pt; }
+    .of-registration-page.council-compact .of-table th,
+    .of-registration-page.council-compact .of-table td { padding: 1.8pt 3.5pt; }
+    .of-registration-page.council-compact .of-sign { margin-top: 10pt; font-size: 10pt; }
+
+    /* When 5 or more council members are present (up to 12) */
+    .of-registration-page.council-dense {
+      font-size: 9.5pt;
+      line-height: 1.15;
+    }
+    .of-registration-page.council-dense .of-logo { margin-bottom: 0; }
+    .of-registration-page.council-dense .of-logo img { width: 34pt; }
+    .of-registration-page.council-dense .of-title { font-size: 10.5pt; }
+    .of-registration-page.council-dense .of-subtitle { font-size: 9.5pt; margin: 1pt 0 3pt; }
+    .of-registration-page.council-dense .of-row { font-size: 9.5pt; margin: 1pt 0; gap: 2pt; line-height: 1.15; }
+    .of-registration-page.council-dense .of-fill { min-height: 11pt; }
+    .of-registration-page.council-dense .of-box { width: 9.5pt; height: 9.5pt; font-size: 7.5pt; margin: 0 1.5pt; }
+    .of-registration-page.council-dense .of-section-title { font-size: 9.5pt; margin: 2pt 0 0.5pt; }
+    .of-registration-page.council-dense .of-grid2 { gap: 1pt 10pt; }
+    .of-registration-page.council-dense .of-checkitem { font-size: 9.5pt; line-height: 1.15; }
+    .of-registration-page.council-dense .of-table { font-size: 8.5pt; margin-top: 1.5pt; }
+    .of-registration-page.council-dense .of-table th,
+    .of-registration-page.council-dense .of-table td { padding: 1pt 2.5pt; }
+    .of-registration-page.council-dense .of-sign { margin-top: 6pt; font-size: 9pt; }
+    .of-registration-page.council-dense .of-sign div { padding-top: 2pt; }
+
+    /* ─── 2. CHECKLIST FORM (Spacious, Clear & 1 Page) ─── */
+    .of-checklist-page {
       font-size: 12pt;
-      color: #000;
+      line-height: 1.35;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    .of-checklist-page .of-logo { text-align: center; margin-bottom: 3pt; }
+    .of-checklist-page .of-logo img { width: 50pt; height: auto; }
+    .of-checklist-page .of-title {
+      text-align: center;
+      font-size: 14pt;
+      font-weight: bold;
+      letter-spacing: 0.2pt;
+      margin-top: 2pt;
+      margin-bottom: 2pt;
+    }
+    .of-checklist-page .of-subtitle {
+      text-align: center;
+      font-size: 12.5pt;
+      font-weight: bold;
+      text-decoration: none;
+      margin: 3pt 0 16pt;
+    }
+    .of-checklist-page .of-row {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 4pt;
+      margin: 6pt 0;
+      font-size: 12pt;
+    }
+    .of-checklist-page .of-num {
+      white-space: nowrap;
+      font-weight: 600;
+    }
+    .of-checklist-page .of-fill {
+      flex: 1;
+      min-width: 50pt;
+      border-bottom: 1pt dotted #444;
+      min-height: 14pt;
+      padding-left: 4pt;
+    }
+    .of-checklist-page .of-box {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 12.5pt;
+      height: 12.5pt;
+      border: 1pt solid #000;
+      font-size: 9.5pt;
+      font-weight: bold;
+      margin: 0 3pt;
+      flex-shrink: 0;
+    }
+    .of-checklist-page .of-grid2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4pt 24pt;
+      margin: 5pt 0 14pt 14pt;
+    }
+    .of-checklist-page .of-checkitem {
+      display: flex;
+      align-items: center;
+      gap: 3pt;
+      font-size: 12pt;
+      padding: 1.5pt 0;
+    }
+    .of-checklist-page .of-section-title {
+      font-weight: bold;
+      font-size: 12.5pt;
+      margin: 14pt 0 6pt;
+    }
+    .of-checklist-page .of-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11.5pt;
+      margin-top: 5pt;
+      margin-bottom: 12pt;
+    }
+    .of-checklist-page .of-table th,
+    .of-checklist-page .of-table td {
+      border: 0.75pt solid #333;
+      padding: 6pt 7pt;
+      text-align: left;
+      vertical-align: middle;
+    }
+    .of-checklist-page .of-table th { background: #f4f4f4; font-weight: bold; }
+    .of-checklist-page .of-sign {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 55pt;
+      font-size: 12pt;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    .of-checklist-page .of-sign div {
+      border-top: 1pt solid #000;
+      padding-top: 5pt;
+      width: 42%;
+      text-align: center;
     }
   </style>
+  <script>
+    function autoAdjustForms() {
+      try {
+        var forms = document.querySelectorAll('.official-form-print');
+        forms.forEach(function(form) {
+          // Printable height of A4 at 96dpi with 8mm margins is ~1045px
+          var maxAllowed = 1045;
+          var curHeight = form.scrollHeight;
+          if (curHeight > maxAllowed) {
+            var ratio = Math.floor(((maxAllowed - 10) / curHeight) * 100) / 100;
+            if (ratio < 0.65) ratio = 0.65;
+            form.style.zoom = ratio;
+          }
+        });
+      } catch (e) {}
+    }
+    window.autoAdjustForms = autoAdjustForms;
+    window.addEventListener('load', function() {
+      autoAdjustForms();
+    });
+  </script>
 </head>
 <body>
   <div class="print-bundle">
@@ -1728,10 +2290,10 @@ export default function MCManagementBackend({ currentUser }) {
                 // Print normally using a hidden iframe instead of a new tab
                 const iframe = document.createElement('iframe');
                 iframe.style.position = 'fixed';
-                iframe.style.right = '0';
+                iframe.style.right = '200vw'; // push completely off-screen
                 iframe.style.bottom = '0';
-                iframe.style.width = '0';
-                iframe.style.height = '0';
+                iframe.style.width = '210mm'; // Standard A4 width
+                iframe.style.height = '297mm'; // Standard A4 height
                 iframe.style.border = '0';
                 document.body.appendChild(iframe);
 
@@ -1741,10 +2303,15 @@ export default function MCManagementBackend({ currentUser }) {
                 doc.close();
 
                 setTimeout(() => {
+                    try {
+                        if (iframe.contentWindow.autoAdjustForms) {
+                            iframe.contentWindow.autoAdjustForms();
+                        }
+                    } catch (e) {}
                     iframe.contentWindow.focus();
                     iframe.contentWindow.print();
-                    setTimeout(() => document.body.removeChild(iframe), 1000);
-                }, 300);
+                    setTimeout(() => document.body.removeChild(iframe), 1200);
+                }, 350);
             }
             setPrintingOfficialForms(false);
         }, 50);
@@ -1902,11 +2469,12 @@ export default function MCManagementBackend({ currentUser }) {
             }))
         ];
 
-        const fileNo = invoice.file_no || invoice.invoice_number || '';
+        const fileNo = invoice.file_no || invoice.new_file_no || invoice.old_file_no || invoice.invoice_number || '';
         const rl = invoice._rlOverrides || {};
         const refDisplay = rl.refNo || fileNo;
-        const dateDisplay = rl.date ? formatDotDate(rl.date) : formatDotDate(new Date().toISOString().slice(0, 10));
-        const signName = rl.signName || 'Samantha Ampaala';
+        const dateDisplay = rl.date ? formatDotDate(rl.date) : getTodayDotDate();
+        const rawSignName = rl.signName || 'Samantha Ampagala';
+        const signName = (rawSignName === 'Samantha Ampaala') ? 'Samantha Ampagala' : rawSignName;
         const signTitle1 = rl.signTitle1 || 'Assistant General Manager (Customer Care)';
         const signTitle2 = rl.signTitle2 || 'Condominium Management Authority';
         const addressLines = String(invoice.address || '')
@@ -1977,10 +2545,42 @@ export default function MCManagementBackend({ currentUser }) {
             cursor: 'text',
             minWidth: 10,
         } : {};
+        const defaultRecipientHtml = `<div>The Secretary,</div>` +
+            (() => {
+                const n = invoice.management_corporation_name || '-';
+                if (n.includes(' - ')) {
+                    const idx = n.indexOf(' - ');
+                    return `<div>${escapeHtml(n.substring(0, idx))}</div><div>${escapeHtml(n.substring(idx + 3))}</div>`;
+                }
+                return `<div>${escapeHtml(n)}</div>`;
+            })() +
+            addressLines.map(line => `<div>${escapeHtml(line)}</div>`).join('');
+        const defaultTitleHtml = `RENEWAL REGISTRATION OF THE MANAGEMENT CORPORATION FOR YEAR<br/>${periodLabel}`;
+        const defaultPrePeriodHeading = preDisplayRows.length > 0
+            ? `Period ${preDisplayRows[0].yearLabel}${preDisplayRows[preDisplayRows.length - 1].yearLabel !== preDisplayRows[0].yearLabel ? ` - ${preDisplayRows[preDisplayRows.length - 1].yearLabel}` : ''}`
+            : '';
+        const defaultPostPeriodHeading = postDisplayRows.length > 0
+            ? `Period ${postDisplayRows[0].yearLabel}${postDisplayRows[postDisplayRows.length - 1].yearLabel !== postDisplayRows[0].yearLabel ? ` - ${postDisplayRows[postDisplayRows.length - 1].yearLabel}` : ''}`
+            : '';
+
+        if (rl.customLetterHtml) {
+            return (
+                <div
+                    className="official-letter"
+                    contentEditable={!!onUpdateOverrides}
+                    suppressContentEditableWarning
+                    style={{ fontFamily: 'Times New Roman, serif', fontSize: 15, lineHeight: 1.38, outline: 'none' }}
+                    dangerouslySetInnerHTML={{ __html: rl.customLetterHtml }}
+                    onInput={() => {
+                        if (onUpdateOverrides) onUpdateOverrides({});
+                    }}
+                />
+            );
+        }
 
         return (
-            <div className="official-letter" style={{ fontFamily: 'Times New Roman, serif', fontSize: 15, lineHeight: 1.6 }}>
-                <div className="ol-ref" style={{ overflow: 'hidden' }}>
+            <div className="official-letter" style={{ fontFamily: 'Times New Roman, serif', fontSize: 15, lineHeight: 1.38 }}>
+                <div className="ol-ref" style={{ overflow: 'hidden', fontWeight: 'normal' }}>
                     <span
                         contentEditable={!!onUpdateOverrides}
                         suppressContentEditableWarning
@@ -1991,7 +2591,7 @@ export default function MCManagementBackend({ currentUser }) {
                         contentEditable={!!onUpdateOverrides}
                         suppressContentEditableWarning
                         style={{ ...editableStyle, float: 'right' }}
-                        onBlur={onUpdateOverrides ? (e) => onUpdateOverrides({ date: e.currentTarget.innerText.trim() }) : undefined}
+                        onBlur={onUpdateOverrides ? (e) => onUpdateOverrides({ date: e.currentTarget.innerText.trim(), isManualDate: true }) : undefined}
                     >{dateDisplay}</span>
                 </div>
 
@@ -2000,33 +2600,18 @@ export default function MCManagementBackend({ currentUser }) {
                     contentEditable={!!onUpdateOverrides}
                     suppressContentEditableWarning
                     style={editableBlockStyle}
-                >
-                    <div>The Secretary,</div>
-                    {(() => {
-                        const n = invoice.management_corporation_name || '-';
-                        if (n.includes(' - ')) {
-                            const idx = n.indexOf(' - ');
-                            return (
-                                <>
-                                    <div>{n.substring(0, idx)}</div>
-                                    <div>{n.substring(idx + 3)}</div>
-                                </>
-                            );
-                        }
-                        return <div>{n}</div>;
-                    })()}
-                    {addressLines.map((line, i) => <div key={i}>{line}</div>)}
-                </div>
+                    onBlur={onUpdateOverrides ? (e) => onUpdateOverrides({ recipientHtml: e.currentTarget.innerHTML }) : undefined}
+                    dangerouslySetInnerHTML={{ __html: rl.recipientHtml || defaultRecipientHtml }}
+                />
 
                 <div
                     className="ol-title"
                     contentEditable={!!onUpdateOverrides}
                     suppressContentEditableWarning
                     style={editableBlockStyle}
-                >
-                    RENEWAL REGISTRATION OF THE MANAGEMENT CORPORATION FOR YEAR<br />
-                    {periodLabel}
-                </div>
+                    onBlur={onUpdateOverrides ? (e) => onUpdateOverrides({ titleHtml: e.currentTarget.innerHTML }) : undefined}
+                    dangerouslySetInnerHTML={{ __html: rl.titleHtml || defaultTitleHtml }}
+                />
 
                 <p
                     className="ol-para"
@@ -2039,10 +2624,14 @@ export default function MCManagementBackend({ currentUser }) {
 
                 {hasPre && (
                     <>
-                        <div className="ol-yearline">
-                            Period {preDisplayRows[0].yearLabel}
-                            {preDisplayRows[preDisplayRows.length - 1].yearLabel !== preDisplayRows[0].yearLabel && ` - ${preDisplayRows[preDisplayRows.length - 1].yearLabel}`}
-                        </div>
+                        <div
+                            className="ol-yearline"
+                            contentEditable={!!onUpdateOverrides}
+                            suppressContentEditableWarning
+                            style={editableBlockStyle}
+                            onBlur={onUpdateOverrides ? (e) => onUpdateOverrides({ prePeriodHeading: e.currentTarget.innerText.trim() }) : undefined}
+                            dangerouslySetInnerHTML={{ __html: rl.prePeriodHeading || defaultPrePeriodHeading }}
+                        />
                         <table className="ol-table">
                             <thead>
                                 <tr>
@@ -2059,12 +2648,12 @@ export default function MCManagementBackend({ currentUser }) {
                                     const globalIdx = displayRows.indexOf(g);
                                     return (
                                         <tr key={i}>
-                                            {tdEdit(globalIdx, 'yearLabel', g.yearLabel)}
-                                            {tdEdit(globalIdx, 'rateLabel', g.rateLabel)}
-                                            {tdEdit(globalIdx, 'fee', fmt(g.fee))}
-                                            {tdEdit(globalIdx, 'sscl', fmt(g.sscl))}
-                                            {tdEdit(globalIdx, 'vat', fmt(g.vat))}
-                                            {tdEdit(globalIdx, 'total', fmt(g.total))}
+                                             {tdEdit(globalIdx, 'yearLabel', g.yearLabel)}
+                                             {tdEdit(globalIdx, 'rateLabel', g.rateLabel)}
+                                             {tdEdit(globalIdx, 'fee', fmt(g.fee))}
+                                             {tdEdit(globalIdx, 'sscl', fmt(g.sscl))}
+                                             {tdEdit(globalIdx, 'vat', fmt(g.vat))}
+                                             {tdEdit(globalIdx, 'total', fmt(g.total))}
                                         </tr>
                                     );
                                 })}
@@ -2081,16 +2670,27 @@ export default function MCManagementBackend({ currentUser }) {
                 )}
 
                 {hasPre && hasPost && (
-                    <p className="ol-para">We wish to inform you that charges have been revised and are applicable per unit basis from 01.03.2023 as follows.</p>
+                    <p
+                        className="ol-para"
+                        contentEditable={!!onUpdateOverrides}
+                        suppressContentEditableWarning
+                        style={editableBlockStyle}
+                        onBlur={onUpdateOverrides ? (e) => onUpdateOverrides({ transitionalText: e.currentTarget.innerHTML }) : undefined}
+                        dangerouslySetInnerHTML={{ __html: rl.transitionalText || 'We wish to inform you that charges have been revised and are applicable per unit basis from 01.03.2023 as follows.' }}
+                    />
                 )}
 
                 {hasPost && (
                     <>
-                        <div className="ol-yearline">
-                            Period {postDisplayRows[0].yearLabel}
-                            {postDisplayRows[postDisplayRows.length - 1].yearLabel !== postDisplayRows[0].yearLabel && ` - ${postDisplayRows[postDisplayRows.length - 1].yearLabel}`}
-                        </div>
-                        <table className="ol-table">
+                        <div
+                            className="ol-yearline"
+                            contentEditable={!!onUpdateOverrides}
+                            suppressContentEditableWarning
+                            style={editableBlockStyle}
+                            onBlur={onUpdateOverrides ? (e) => onUpdateOverrides({ postPeriodHeading: e.currentTarget.innerText.trim() }) : undefined}
+                            dangerouslySetInnerHTML={{ __html: rl.postPeriodHeading || defaultPostPeriodHeading }}
+                        />
+<table className="ol-table">
                             <thead>
                                 <tr>
                                     <th rowSpan={2}>Year</th>
@@ -2146,32 +2746,45 @@ export default function MCManagementBackend({ currentUser }) {
                     contentEditable={!!onUpdateOverrides}
                     suppressContentEditableWarning
                     style={editableBlockStyle}
-                    onBlur={onUpdateOverrides ? (e) => onUpdateOverrides({ paymentNote: e.currentTarget.innerText }) : undefined}
-                >
-                    Payment with regard to the above can be paid by cash or cheque in favor of &quot;<strong>Condominium Management Authority</strong>&quot;
-                </p>
+                    onBlur={onUpdateOverrides ? (e) => onUpdateOverrides({ paymentNote: e.currentTarget.innerHTML }) : undefined}
+                    dangerouslySetInnerHTML={{ __html: rl.paymentNote || 'Payment with regard to the above can be paid by cash or cheque in favor of &quot;<strong>Condominium Management Authority</strong>&quot;' }}
+                />
 
-                <p className="ol-para">Thank You.</p>
-                <p className="ol-para">Yours Faithfully,</p>
-
-                <div
-                    className="ol-sign"
+                <p
+                    className="ol-para"
                     contentEditable={!!onUpdateOverrides}
                     suppressContentEditableWarning
                     style={editableBlockStyle}
-                    onBlur={onUpdateOverrides ? (e) => {
-                        const lines = e.currentTarget.innerText.split('\n').filter(l => l.trim());
-                        onUpdateOverrides({
-                            signName: lines[0] || signName,
-                            signTitle1: lines[1] || signTitle1,
-                            signTitle2: lines[2] || signTitle2,
-                        });
-                    } : undefined}
-                >
+                    onBlur={onUpdateOverrides ? (e) => onUpdateOverrides({ closingNote1: e.currentTarget.innerText.trim() }) : undefined}
+                >{rl.closingNote1 || 'Thank You.'}</p>
+                <p
+                    className="ol-para"
+                    contentEditable={!!onUpdateOverrides}
+                    suppressContentEditableWarning
+                    style={editableBlockStyle}
+                    onBlur={onUpdateOverrides ? (e) => onUpdateOverrides({ closingNote2: e.currentTarget.innerText.trim() }) : undefined}
+                >{rl.closingNote2 || 'Yours Faithfully,'}</p>
+
+                <div className="ol-sign" style={{ marginTop: 20 }}>
                     <div className="ol-sign-space" />
-                    <div><strong>{signName}</strong></div>
-                    <div><strong>{signTitle1}</strong></div>
-                    <div><strong>{signTitle2}</strong></div>
+                    <div
+                        contentEditable={!!onUpdateOverrides}
+                        suppressContentEditableWarning
+                        style={editableBlockStyle}
+                        onBlur={onUpdateOverrides ? (e) => onUpdateOverrides({ signName: e.currentTarget.innerText.trim() }) : undefined}
+                    ><strong>{signName}</strong></div>
+                    <div
+                        contentEditable={!!onUpdateOverrides}
+                        suppressContentEditableWarning
+                        style={editableBlockStyle}
+                        onBlur={onUpdateOverrides ? (e) => onUpdateOverrides({ signTitle1: e.currentTarget.innerText.trim() }) : undefined}
+                    ><strong>{signTitle1}</strong></div>
+                    <div
+                        contentEditable={!!onUpdateOverrides}
+                        suppressContentEditableWarning
+                        style={editableBlockStyle}
+                        onBlur={onUpdateOverrides ? (e) => onUpdateOverrides({ signTitle2: e.currentTarget.innerText.trim() }) : undefined}
+                    ><strong>{signTitle2}</strong></div>
                 </div>
             </div>
         );
@@ -2190,14 +2803,28 @@ export default function MCManagementBackend({ currentUser }) {
         const ackYearTo = ackOverrides.yearTo || ackOverrides.year;
         const isMultiYearAck = ackYearFrom && ackYearTo && String(ackYearFrom) !== String(ackYearTo);
 
+        if (ackCustomHtml) {
+            return (
+                <div
+                    className="official-letter"
+                    id="ack-letter-content-render"
+                    contentEditable
+                    suppressContentEditableWarning
+                    style={{ fontFamily: 'Times New Roman, serif', fontSize: 16, lineHeight: 1.6, padding: '24px 28px', outline: 'none' }}
+                    dangerouslySetInnerHTML={{ __html: ackCustomHtml }}
+                    onInput={() => setAckSaved(false)}
+                />
+            );
+        }
+
         return (
-            <div className="official-letter" id="ack-letter-content-render">
+            <div className="official-letter" id="ack-letter-content-render" style={{ fontFamily: 'Times New Roman, serif', fontSize: 16, lineHeight: 1.6, padding: '24px 28px' }} onInput={() => setAckSaved(false)}>
                 <div className="ol-ref" style={{ overflow: 'hidden', marginBottom: '25px' }}>
-                    <span contentEditable suppressContentEditableWarning style={{ float: 'left' }}>{ackOverrides.refNo}</span>
-                    <span contentEditable suppressContentEditableWarning style={{ float: 'right' }}>{formatDotDate(ackOverrides.date)}</span>
+                    <span contentEditable suppressContentEditableWarning style={{ float: 'left', outline: 'none' }}>{ackOverrides.refNo}</span>
+                    <span contentEditable suppressContentEditableWarning style={{ float: 'right', outline: 'none' }}>{formatDotDate(ackOverrides.date)}</span>
                 </div>
 
-                <div className="ol-addr" contentEditable suppressContentEditableWarning>
+                <div className="ol-addr" contentEditable suppressContentEditableWarning style={{ outline: 'none' }}>
                     <div>The Secretary,</div>
                     {(() => {
                         const n = mc.management_corporation_name || mc.name || '-';
@@ -2215,9 +2842,9 @@ export default function MCManagementBackend({ currentUser }) {
                     {addressLines.map((line, i) => <div key={i}>{line}</div>)}
                 </div>
 
-                <p className="ol-para" contentEditable suppressContentEditableWarning>Dear Sir/Madam,</p>
+                <p className="ol-para" contentEditable suppressContentEditableWarning style={{ outline: 'none' }}>Dear Sir/Madam,</p>
 
-                <div className="ol-title" contentEditable suppressContentEditableWarning style={{ fontWeight: 'bold', textDecoration: 'underline' }}>
+                <div className="ol-title" contentEditable suppressContentEditableWarning style={{ fontWeight: 'bold', textDecoration: 'underline', outline: 'none' }}>
                     RENEWAL OF REGISTRATION OF THE MANAGEMENT CORPORATION<br />
                     {isMultiYearAck
                         ? `(01 January ${ackYearFrom} – 31 December ${ackYearTo})`
@@ -2225,18 +2852,18 @@ export default function MCManagementBackend({ currentUser }) {
                     }
                 </div>
 
-                <p className="ol-para" contentEditable suppressContentEditableWarning>
+                <p className="ol-para" contentEditable suppressContentEditableWarning style={{ outline: 'none' }}>
                     We acknowledge with thanks the receipt of the Management Corporation Registration Renewal Fee amounting to Rs. {ackOverrides.amount}, which was received on <span style={{ whiteSpace: 'nowrap' }}>{formatOrdinalDate(ackOverrides.paidDate)}</span>.
                 </p>
 
-                <p className="ol-para" contentEditable suppressContentEditableWarning>
+                <p className="ol-para" contentEditable suppressContentEditableWarning style={{ outline: 'none' }}>
                     Accordingly, the registration of the Management Corporation has been renewed and is valid until <span style={{ whiteSpace: 'nowrap' }}>31<sup>st</sup> December {ackYearTo}</span>. Please note that the registration shall be renewed annually.
                 </p>
 
-                <p className="ol-para" contentEditable suppressContentEditableWarning>Thank you.</p>
-                <p className="ol-para" contentEditable suppressContentEditableWarning>Yours faithfully,</p>
+                <p className="ol-para" contentEditable suppressContentEditableWarning style={{ outline: 'none' }}>Thank you.</p>
+                <p className="ol-para" contentEditable suppressContentEditableWarning style={{ outline: 'none' }}>Yours faithfully,</p>
 
-                <div className="ol-sign" contentEditable suppressContentEditableWarning>
+                <div className="ol-sign" contentEditable suppressContentEditableWarning style={{ outline: 'none' }}>
                     <div>{ackOverrides.signName}</div>
                     <div><strong>{ackOverrides.signTitle1}</strong></div>
                     <div><strong>{ackOverrides.signTitle2}</strong></div>
@@ -2537,7 +3164,7 @@ export default function MCManagementBackend({ currentUser }) {
             if (!isNaN(pd)) isoPaidDate = pd.toISOString().slice(0, 10);
         }
 
-        setAckOverrides({
+        const cleanAckDefaults = {
             refNo: displayRefNo,
             date: isoDate,
             year: String(latestPaidYear),
@@ -2547,12 +3174,55 @@ export default function MCManagementBackend({ currentUser }) {
             paidDate: isoPaidDate,
             signName: 'Samantha Ampagala',
             signTitle1: 'Assistant General Manager (Customer Care) ',
-            signTitle2: 'Condominium Management Authority'
-        });
+            signTitle2: 'Condominium Management Authority',
+            toEmail: mc.email_address || mc.secretary_email || '',
+            customLetterHtml: null
+        };
 
+        const savedAck = loadAckOverrides(mc);
+        const activeAck = savedAck ? { ...cleanAckDefaults, ...savedAck } : { ...cleanAckDefaults };
+
+        setAckDefaultOverrides(cleanAckDefaults);
+        setAckOverrides(activeAck);
+        ackOverridesRef.current = activeAck;
+        setAckCustomHtml(savedAck?.customLetterHtml || null);
+        setAckSaved(!!savedAck);
+        setAckRenderKey(prev => prev + 1);
+
+        setShowAckToolbar(false);
         setViewRecord(mc);
         setAckModalOpen(true);
     }
+
+    const handleSaveAck = () => {
+        if (!viewRecord) return;
+        const rendered = document.getElementById('ack-letter-content-render');
+        const customHtml = rendered ? rendered.innerHTML : null;
+        const toSave = {
+            ...ackOverridesRef.current,
+            customLetterHtml: customHtml
+        };
+        ackOverridesRef.current = toSave;
+        setAckOverrides(toSave);
+        setAckCustomHtml(customHtml);
+        saveAckOverrides(viewRecord, toSave);
+        setAckSaved(true);
+        showToast('Acknowledgement letter saved successfully! ✅', 'success');
+    };
+
+    const handleUndoAck = () => {
+        if (!viewRecord) return;
+        const resetDefaults = { ...(ackDefaultOverrides || {}), customLetterHtml: null };
+        ackOverridesRef.current = resetDefaults;
+        setAckOverrides(resetDefaults);
+        setAckCustomHtml(null);
+        try {
+            localStorage.removeItem(getAckStorageKey(viewRecord));
+        } catch {}
+        setAckSaved(false);
+        setAckRenderKey(prev => prev + 1);
+        showToast('Reset letter back to original defaults! ↺', 'info');
+    };
 
     function printAcknowledgement() {
         if (!viewRecord) return;
@@ -2562,6 +3232,17 @@ export default function MCManagementBackend({ currentUser }) {
         let html = '';
 
         if (renderedContent) {
+            const customHtml = renderedContent.innerHTML;
+            const toSave = {
+                ...ackOverridesRef.current,
+                customLetterHtml: customHtml
+            };
+            ackOverridesRef.current = toSave;
+            setAckOverrides(toSave);
+            setAckCustomHtml(customHtml);
+            saveAckOverrides(viewRecord, toSave);
+            setAckSaved(true);
+
             // Build standalone HTML using the user's edited content directly from the DOM
             html = `<!DOCTYPE html>
 <html>
@@ -2569,11 +3250,11 @@ export default function MCManagementBackend({ currentUser }) {
 <meta charset="utf-8" />
 <title>Acknowledgement Letter - ${escapeHtml(viewRecord.acknowledgement_no || '')}</title>
 <style>
-  @page { size: A4; margin: 0; }
+  @page { size: A4; margin: 0 !important; }
   * { box-sizing: border-box; }
   body { margin: 0; padding: 0; font-family: 'Times New Roman', serif; color: #111; background: #fff; }
-  .doc-page { padding: 15mm; min-height: 100vh; }
-  .official-letter { max-width: 680px; margin: 0 auto; padding-top: 2.2in; font-family: 'Times New Roman', serif; font-size: 16px; line-height: 1.6; }
+  .doc-page { padding: 0; margin: 0; min-height: 100vh; }
+  .official-letter { width: 100%; max-width: 210mm; margin: 0; padding: 2.7in 0.8in 0.5in 1.2in; box-sizing: border-box; font-family: 'Times New Roman', serif; font-size: 16px; line-height: 1.6; }
   .ol-ref { display: flex; justify-content: space-between; margin-bottom: 25px; }
   .ol-addr { margin-bottom: 25px; }
   .ol-addr div { margin: 3px 0; }
@@ -2844,9 +3525,12 @@ export default function MCManagementBackend({ currentUser }) {
         const council = parseCouncilMembers(mc.council_members);
         const romanNumerals = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
         const Box = ({ checked }) => <span className="of-box">{checked ? '✓' : ''}</span>;
+        const filledCouncil = council.filter(row => row && (row.name || row.unit_no || row.contact_no));
+        const councilCount = filledCouncil.length > 0 ? filledCouncil.length : 1;
+        const councilTierClass = councilCount <= 2 ? 'council-normal' : (councilCount <= 4 ? 'council-compact' : 'council-dense');
         return (
-            <div className="official-form-print" style={{ pageBreakInside: 'avoid' }}>
-                <div className="of-logo" style={{ marginTop: 8 }}><img src={CMA_LOGO_BASE64} alt="CMA Logo" /></div>
+            <div className={`official-form-print of-registration-page ${councilTierClass}`} style={{ pageBreakInside: 'avoid' }}>
+                <div className="of-logo" style={{ marginTop: 0 }}><img src={CMA_LOGO_BASE64} alt="CMA Logo" /></div>
                 <div className="of-title">CONDOMINIUM MANAGEMENT AUTHORITY</div>
                 <div className="of-subtitle">APPLICATION FOR REGISTRATION AS A MANAGEMENT CORPORATION</div>
 
@@ -2956,7 +3640,7 @@ export default function MCManagementBackend({ currentUser }) {
         };
         const Box = ({ checked }) => <span className="of-box">{checked ? '✓' : ''}</span>;
         return (
-            <div className="official-form-print">
+            <div className="official-form-print of-checklist-page">
                 <div className="of-logo"><img src={CMA_LOGO_BASE64} alt="CMA Logo" /></div>
                 <div className="of-title" style={{ marginTop: 4 }}>CUSTOMER CARE UNIT</div>
                 <div className="of-subtitle">DOCUMENT CHECK LIST FOR MANAGEMENT CORPORATION</div>
@@ -3906,7 +4590,7 @@ export default function MCManagementBackend({ currentUser }) {
           body.receipt-print-mode { margin: 0; padding: 0; height: 100%; overflow: hidden !important; }
           body.receipt-print-mode * { visibility: hidden !important; }
           body.receipt-print-mode .print-receipt, body.receipt-print-mode .print-receipt * { visibility: visible !important; }
-          body.receipt-print-mode .print-receipt { display: block !important; position: absolute; left: 0; right: 0; margin: 0 auto; top: 10%; padding: 0 10mm; width: 100%; max-width: 720px; }
+          body.receipt-print-mode .print-receipt { display: block !important; position: absolute; left: 0; right: 0; margin: 0; top: 0; padding: 15mm 0.8in 15mm 1.2in; width: 100%; max-width: 210mm; box-sizing: border-box; }
 
           body.bundle-print-mode { margin: 0; padding: 0; height: auto !important; background: #fff !important; }
           body.bundle-print-mode .cma-page,
@@ -3922,7 +4606,7 @@ export default function MCManagementBackend({ currentUser }) {
         /* Covering letter / Acknowledgement letter - shared "official-letter" typography,
            matching the CMA Renewal Request & Acknowledgement letter formats. */
         .official-letter { max-width: 680px; margin: 0; padding: 24px; font-family: 'Times New Roman', serif; color: #111; font-size: 16px; line-height: 1.4; }
-        .official-letter .ol-ref { display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 12px; }
+        .official-letter .ol-ref { display: flex; justify-content: space-between; font-weight: normal; margin-bottom: 12px; }
         .official-letter .ol-addr { margin-bottom: 10px; }
         .official-letter .ol-addr div { margin: 1px 0; }
         .official-letter .ol-title { text-align: left; font-weight: 700; text-decoration: underline; margin: 12px 0; white-space: nowrap; }
@@ -3955,19 +4639,61 @@ export default function MCManagementBackend({ currentUser }) {
         .official-form-print .of-sign { display: flex; justify-content: space-between; margin-top: 20px; font-size: 11px; page-break-inside: avoid; }
         .official-form-print .of-sign div { border-top: 1px solid #111; padding-top: 4px; width: 44%; text-align: center; }
         @media print {
-          .official-form-print { padding: 14px 22px; }
-          .official-form-print .of-logo img { width: 64px; }
-          .official-form-print .of-title { font-size: 15px; }
-          .official-form-print .of-subtitle { font-size: 13px; margin: 4px 0 16px; }
-          .official-form-print .of-row { font-size: 12.5px; margin: 7px 0; gap: 6px; }
-          .official-form-print .of-fill { min-height: 15px; }
-          .official-form-print .of-box { width: 16px; height: 16px; font-size: 11px; }
-          .official-form-print .of-section-title { font-size: 12.5px; margin: 14px 0 6px; }
-          .official-form-print .of-grid2 { gap: 4px 22px; }
-          .official-form-print .of-checkitem { font-size: 12px; padding: 2px 0; }
-          .official-form-print table.of-table { font-size: 11.5px; margin-top: 8px; }
-          .official-form-print table.of-table th, .official-form-print table.of-table td { padding: 5px 7px; }
-          .official-form-print .of-sign { margin-top: 24px; font-size: 12px; page-break-inside: avoid; }
+          .official-form-print { padding: 8mm 15mm 8mm 1.2in; width: 100%; box-sizing: border-box; }
+          .of-registration-page { font-size: 11.5pt; line-height: 1.26; page-break-inside: avoid; break-inside: avoid; }
+          .of-registration-page .of-logo img { width: 46pt; }
+          .of-registration-page .of-title { font-size: 12.5pt; margin: 0; }
+          .of-registration-page .of-subtitle { font-size: 11.5pt; margin: 2pt 0 8pt; }
+          .of-registration-page .of-row { font-size: 11.5pt; margin: 2.5pt 0; gap: 2pt; line-height: 1.26; }
+          .of-registration-page .of-fill { min-height: 13pt; }
+          .of-registration-page .of-box { width: 10.5pt; height: 10.5pt; font-size: 8pt; }
+          .of-registration-page .of-section-title { font-size: 11.5pt; margin: 5.5pt 0 1.5pt; }
+          .of-registration-page .of-grid2 { gap: 1.5pt 12pt; }
+          .of-registration-page .of-checkitem { font-size: 11.5pt; line-height: 1.26; }
+          .of-registration-page table.of-table { font-size: 10.5pt; margin-top: 3pt; }
+          .of-registration-page table.of-table th, .of-registration-page table.of-table td { padding: 2.5pt 4pt; }
+          .of-registration-page .of-sign { margin-top: 18pt; font-size: 11pt; page-break-inside: avoid; break-inside: avoid; }
+
+          /* Council Tier overrides for Ctrl+P print view */
+          .of-registration-page.council-compact { font-size: 10.5pt; line-height: 1.20; }
+          .of-registration-page.council-compact .of-logo img { width: 40pt; }
+          .of-registration-page.council-compact .of-title { font-size: 11.5pt; }
+          .of-registration-page.council-compact .of-subtitle { font-size: 10.5pt; margin: 1pt 0 5pt; }
+          .of-registration-page.council-compact .of-row { font-size: 10.5pt; margin: 1.8pt 0; line-height: 1.20; }
+          .of-registration-page.council-compact .of-section-title { font-size: 10.5pt; margin: 3.5pt 0 1pt; }
+          .of-registration-page.council-compact .of-checkitem { font-size: 10.5pt; line-height: 1.20; }
+          .of-registration-page.council-compact table.of-table { font-size: 9.5pt; margin-top: 2pt; }
+          .of-registration-page.council-compact table.of-table th, .of-registration-page.council-compact table.of-table td { padding: 1.8pt 3.5pt; }
+          .of-registration-page.council-compact .of-sign { margin-top: 10pt; font-size: 10pt; }
+
+          .of-registration-page.council-dense { font-size: 9.5pt; line-height: 1.15; }
+          .of-registration-page.council-dense .of-logo img { width: 34pt; }
+          .of-registration-page.council-dense .of-title { font-size: 10.5pt; }
+          .of-registration-page.council-dense .of-subtitle { font-size: 9.5pt; margin: 1pt 0 3pt; }
+          .of-registration-page.council-dense .of-row { font-size: 9.5pt; margin: 1pt 0; line-height: 1.15; }
+          .of-registration-page.council-dense .of-fill { min-height: 11pt; }
+          .of-registration-page.council-dense .of-box { width: 9.5pt; height: 9.5pt; font-size: 7.5pt; }
+          .of-registration-page.council-dense .of-section-title { font-size: 9.5pt; margin: 2pt 0 0.5pt; }
+          .of-registration-page.council-dense .of-grid2 { gap: 1pt 10pt; }
+          .of-registration-page.council-dense .of-checkitem { font-size: 9.5pt; line-height: 1.15; }
+          .of-registration-page.council-dense table.of-table { font-size: 8.5pt; margin-top: 1.5pt; }
+          .of-registration-page.council-dense table.of-table th, .of-registration-page.council-dense table.of-table td { padding: 1pt 2.5pt; }
+          .of-registration-page.council-dense .of-sign { margin-top: 6pt; font-size: 9pt; }
+          .of-registration-page.council-dense .of-sign div { padding-top: 2pt; }
+
+          .of-checklist-page { font-size: 12pt; line-height: 1.35; page-break-inside: avoid; break-inside: avoid; }
+          .of-checklist-page .of-logo img { width: 50pt; }
+          .of-checklist-page .of-title { font-size: 14pt; margin-top: 2pt; margin-bottom: 2pt; }
+          .of-checklist-page .of-subtitle { font-size: 12.5pt; margin: 3pt 0 16pt; }
+          .of-checklist-page .of-row { font-size: 12pt; margin: 6pt 0; gap: 4pt; }
+          .of-checklist-page .of-fill { min-height: 14pt; }
+          .of-checklist-page .of-box { width: 12.5pt; height: 12.5pt; font-size: 9.5pt; }
+          .of-checklist-page .of-grid2 { gap: 4pt 24pt; margin: 5pt 0 14pt 14pt; }
+          .of-checklist-page .of-checkitem { font-size: 12pt; padding: 1.5pt 0; }
+          .of-checklist-page .of-section-title { font-size: 12.5pt; margin: 14pt 0 6pt; }
+          .of-checklist-page table.of-table { font-size: 11.5pt; margin-top: 5pt; margin-bottom: 12pt; }
+          .of-checklist-page table.of-table th, .of-checklist-page table.of-table td { padding: 6pt 7pt; border: 0.75pt solid #333; }
+          .of-checklist-page .of-sign { margin-top: 55pt; font-size: 12pt; page-break-inside: avoid; break-inside: avoid; }
         }
         .print-receipt, .preview-receipt {
           max-width: 680px; margin: 0 auto; padding: 24px; font-family: 'Times New Roman', serif; color: #111;
@@ -4250,7 +4976,7 @@ export default function MCManagementBackend({ currentUser }) {
                             return (
                                 <div
                                     key={label}
-                                    onClick={() => setStatusFilter(filterValue)}
+                                    onClick={() => setStatusFilter(prev => prev === filterValue ? '' : filterValue)}
                                     style={{
                                         background: theme.card,
                                         borderRadius: 12,
@@ -4278,13 +5004,13 @@ export default function MCManagementBackend({ currentUser }) {
                     </div>
 
                     {/* Table Card */}
-                    <div className={`cma-table-card-container ${isZoomed ? 'table-fullscreen-mode' : ''}`} style={{ background: theme.card, borderRadius: 12, border: `1px solid ${theme.border}`, boxShadow: '0 2px 12px rgba(0,0,0,.07)', overflow: 'hidden' }}>
+                    <div className={`cma-table-card-container ${isZoomed ? 'table-fullscreen-mode' : ''}`} style={{ background: theme.card, borderRadius: 12, border: `1px solid ${theme.border}`, boxShadow: '0 2px 12px rgba(0,0,0,.07)' }}>
 
                         {/* Filters */}
-                        <div style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
-                            <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, whiteSpace: 'nowrap', marginRight: 4 }}>All MC Records</div>
-                            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', flex: '1 1 auto', justifyContent: 'flex-end' }}>
-                                <div style={{ position: 'relative', flex: '1 1 180px', maxWidth: 260 }}>
+                        <div style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                            <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, whiteSpace: 'nowrap', marginRight: 4, flexShrink: 0 }}>All MC Records</div>
+                            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flex: '1 1 auto', justifyContent: 'flex-end', minWidth: 0 }}>
+                                <div style={{ position: 'relative', flex: '1 1 150px', minWidth: 100, maxWidth: 220 }}>
                                     <i className="fas fa-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#999', fontSize: 12 }}></i>
                                     <input id="mc_form_field_14" name="mc_form_field_14"
                                         type="text"
@@ -4299,7 +5025,7 @@ export default function MCManagementBackend({ currentUser }) {
                                 <select id="mc_form_field_15" name="mc_form_field_15"
                                     value={statusFilter}
                                     onChange={(e) => setStatusFilter(e.target.value)}
-                                    style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 105 }}
+                                    style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 105, flexShrink: 0 }}
                                 >
                                     <option value="">All Status</option>
                                     <option value="New">New</option>
@@ -4310,7 +5036,7 @@ export default function MCManagementBackend({ currentUser }) {
                                 <select id="mc_form_field_16" name="mc_form_field_16"
                                     value={renewalViseFilter}
                                     onChange={(e) => setRenewalViseFilter(e.target.value)}
-                                    style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 110 }}
+                                    style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 110, flexShrink: 0 }}
                                 >
                                     <option value="">Renewal (All)</option>
                                     <option>Active</option>
@@ -4319,7 +5045,7 @@ export default function MCManagementBackend({ currentUser }) {
                                 <select id="mc_form_field_17" name="mc_form_field_17"
                                     value={agmViseFilter}
                                     onChange={(e) => setAgmViseFilter(e.target.value)}
-                                    style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 95 }}
+                                    style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 95, flexShrink: 0 }}
                                 >
                                     <option value="">AGM (All)</option>
                                     <option>Active</option>
@@ -4328,7 +5054,7 @@ export default function MCManagementBackend({ currentUser }) {
                                 <select id="mc_form_field_18" name="mc_form_field_18"
                                     value={yearFilter}
                                     onChange={(e) => setYearFilter(e.target.value)}
-                                    style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 85 }}
+                                    style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 85, flexShrink: 0 }}
                                 >
                                     <option value="">All Years</option>
                                     {getYearFilterOptions().map((y) => (
@@ -4338,7 +5064,7 @@ export default function MCManagementBackend({ currentUser }) {
                                 <select id="mc_form_field_month" name="mc_form_field_month"
                                     value={monthFilter}
                                     onChange={(e) => setMonthFilter(e.target.value)}
-                                    style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 110 }}
+                                    style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 110, flexShrink: 0 }}
                                 >
                                     <option value="">All Months</option>
                                     {MONTH_OPTIONS.map((m) => (
@@ -4348,7 +5074,7 @@ export default function MCManagementBackend({ currentUser }) {
                                 <select id="mc_form_field_19" name="mc_form_field_19"
                                     value={categoryFilter}
                                     onChange={(e) => setCategoryFilter(e.target.value)}
-                                    style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 125 }}
+                                    style={{ padding: '5px 8px', height: 30, borderRadius: 4, border: '1px solid #ddd', fontSize: 12, width: 125, flexShrink: 0 }}
                                 >
                                     <option value="">All Categories</option>
                                     <optgroup label="Government">
@@ -4361,6 +5087,204 @@ export default function MCManagementBackend({ currentUser }) {
                                         <option value="Luxury">Private - Luxury</option>
                                     </optgroup>
                                 </select>
+
+                                {/* Zone / Address Filter Dropdown */}
+                                <div ref={zoneDropdownRef} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsZoneOpen(v => !v)}
+                                        title={zoneFilter ? `Filtered by Zone: ${zoneFilter} (Click to change/clear)` : "Filter by Zone / Address"}
+                                        style={{
+                                            width: 32,
+                                            height: 30,
+                                            padding: 0,
+                                            borderRadius: 4,
+                                            border: zoneFilter ? '1px solid #2563eb' : '1px solid #ddd',
+                                            background: zoneFilter ? '#eff6ff' : '#ffffff',
+                                            color: zoneFilter ? '#1d4ed8' : '#64748b',
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            fontSize: 12,
+                                            boxShadow: zoneFilter ? '0 1px 2px rgba(37,99,235,0.1)' : 'none',
+                                            transition: 'all 0.15s ease',
+                                            position: 'relative'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            if (!zoneFilter) e.currentTarget.style.borderColor = '#94a3b8';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            if (!zoneFilter) e.currentTarget.style.borderColor = '#ddd';
+                                        }}
+                                    >
+                                        <i className="fas fa-map-marker-alt" style={{ fontSize: 13, color: zoneFilter ? '#2563eb' : '#64748b' }} />
+                                        {zoneFilter ? (
+                                            <span style={{ position: 'absolute', top: 3, right: 3, width: 6, height: 6, borderRadius: '50%', background: '#2563eb' }} />
+                                        ) : null}
+                                    </button>
+
+                                    {/* Dropdown Popover */}
+                                    {isZoneOpen && (
+                                        <div
+                                            style={{
+                                                position: 'absolute',
+                                                top: 'calc(100% + 6px)',
+                                                right: 0,
+                                                width: 250,
+                                                background: '#ffffff',
+                                                borderRadius: 8,
+                                                border: '1px solid #e2e8f0',
+                                                boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.14), 0 8px 10px -6px rgba(0, 0, 0, 0.08)',
+                                                zIndex: 1100,
+                                                overflow: 'hidden',
+                                                textAlign: 'left'
+                                            }}
+                                        >
+                                            {/* Header */}
+                                            <div style={{ padding: '8px 12px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#1e293b' }}>
+                                                    <i className="fas fa-map-marker-alt" style={{ color: '#2563eb', fontSize: 11 }} />
+                                                    <span>Filter by Zone</span>
+                                                </div>
+                                                {zoneFilter && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setZoneFilter('');
+                                                            setIsZoneOpen(false);
+                                                        }}
+                                                        style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 11, cursor: 'pointer', fontWeight: 600, padding: '2px 4px' }}
+                                                    >
+                                                        Clear
+                                                    </button>
+                                                )}
+                                            </div>
+
+                                            {/* Quick Search */}
+                                            <div style={{ padding: '8px 10px', borderBottom: '1px solid #f1f5f9', background: '#fff' }}>
+                                                <div style={{ position: 'relative' }}>
+                                                    <i className="fas fa-search" style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: 11 }} />
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Search zone / town..."
+                                                        value={zoneSearch}
+                                                        onChange={(e) => setZoneSearch(e.target.value)}
+                                                        autoFocus
+                                                        style={{
+                                                            width: '100%',
+                                                            padding: '5px 24px 5px 26px',
+                                                            fontSize: 12,
+                                                            borderRadius: 5,
+                                                            border: '1px solid #cbd5e1',
+                                                            outline: 'none',
+                                                            boxSizing: 'border-box'
+                                                        }}
+                                                    />
+                                                    {zoneSearch && (
+                                                        <i
+                                                            className="fas fa-times-circle"
+                                                            style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', cursor: 'pointer', fontSize: 11 }}
+                                                            onClick={() => setZoneSearch('')}
+                                                        />
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            {/* Scrollable Zone List */}
+                                            <div style={{ maxHeight: 250, overflowY: 'auto' }}>
+                                                {/* All Zones Option */}
+                                                <div
+                                                    onClick={() => {
+                                                        setZoneFilter('');
+                                                        setIsZoneOpen(false);
+                                                    }}
+                                                    style={{
+                                                        padding: '7px 12px',
+                                                        fontSize: 12,
+                                                        cursor: 'pointer',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'space-between',
+                                                        background: !zoneFilter ? '#f1f5f9' : 'transparent',
+                                                        color: !zoneFilter ? '#0f172a' : '#475569',
+                                                        fontWeight: !zoneFilter ? 600 : 400,
+                                                        borderBottom: '1px solid #f8fafc'
+                                                    }}
+                                                    onMouseEnter={(e) => {
+                                                        if (zoneFilter) e.currentTarget.style.background = '#f8fafc';
+                                                    }}
+                                                    onMouseLeave={(e) => {
+                                                        if (zoneFilter) e.currentTarget.style.background = 'transparent';
+                                                    }}
+                                                >
+                                                    <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                                                        <i className="fas fa-globe" style={{ fontSize: 11, color: !zoneFilter ? '#2563eb' : '#94a3b8' }} />
+                                                        <span>All Zones (Clear Filter)</span>
+                                                    </span>
+                                                    {!zoneFilter && <i className="fas fa-check" style={{ color: '#2563eb', fontSize: 11 }} />}
+                                                </div>
+
+                                                {/* Filtered Zones */}
+                                                {ZONE_OPTIONS
+                                                    .filter(z => !zoneSearch || z.toLowerCase().includes(zoneSearch.trim().toLowerCase()))
+                                                    .map(zone => {
+                                                        const isSelected = zoneFilter === zone;
+                                                        return (
+                                                            <div
+                                                                key={zone}
+                                                                onClick={() => {
+                                                                    setZoneFilter(zone);
+                                                                    setIsZoneOpen(false);
+                                                                    setZoneSearch('');
+                                                                }}
+                                                                style={{
+                                                                    padding: '7px 12px',
+                                                                    fontSize: 12,
+                                                                    cursor: 'pointer',
+                                                                    display: 'flex',
+                                                                    alignItems: 'center',
+                                                                    justifyContent: 'space-between',
+                                                                    background: isSelected ? '#eff6ff' : 'transparent',
+                                                                    color: isSelected ? '#1d4ed8' : '#334155',
+                                                                    fontWeight: isSelected ? 600 : 400,
+                                                                    transition: 'background 0.1s'
+                                                                }}
+                                                                onMouseEnter={(e) => {
+                                                                    if (!isSelected) e.currentTarget.style.background = '#f8fafc';
+                                                                }}
+                                                                onMouseLeave={(e) => {
+                                                                    if (!isSelected) e.currentTarget.style.background = 'transparent';
+                                                                }}
+                                                            >
+                                                                <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                                                                    <i className="fas fa-map-pin" style={{ fontSize: 10, color: isSelected ? '#2563eb' : '#cbd5e1' }} />
+                                                                    <span>{zone}</span>
+                                                                </span>
+                                                                {isSelected && <i className="fas fa-check" style={{ color: '#2563eb', fontSize: 11 }} />}
+                                                            </div>
+                                                        );
+                                                    })}
+
+                                                {ZONE_OPTIONS.filter(z => !zoneSearch || z.toLowerCase().includes(zoneSearch.trim().toLowerCase())).length === 0 && (
+                                                    <div style={{ padding: '16px 12px', textAlign: 'center', color: '#94a3b8', fontSize: 12 }}>
+                                                        No zones match "{zoneSearch}"
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* Footer with count */}
+                                            <div style={{ padding: '6px 12px', background: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: '#64748b' }}>
+                                                <span>{ZONE_OPTIONS.length} zones available</span>
+                                                {zoneFilter ? (
+                                                    <span style={{ color: '#2563eb', fontWeight: 600 }}>Active</span>
+                                                ) : (
+                                                    <span>None active</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
 
@@ -5050,21 +5974,35 @@ export default function MCManagementBackend({ currentUser }) {
 
                                     {/* Renewal Date Vise - badge style */}
                                     {(() => {
-                                        const vise = String(viewRecord.renewal_date_vise || '').trim();
-                                        const isActive = vise.toLowerCase() === 'active';
-                                        const isNonActive = vise.toLowerCase() === 'non active' || vise.toLowerCase() === 'nonactive';
+                                        const currentYear = new Date().getFullYear();
+                                        const rpMatches = String(viewRecord.renewal_period || '').match(/\b(19|20)\d{2}\b/g);
+                                        const rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(viewRecord.renewal_period, 10);
+                                        const rawVise = String(viewRecord.renewal_date_vise || '').trim().toLowerCase();
+                                        const paymentStatus = viewRecord.renewal_payment_status;
+                                        let effectiveVise;
+                                        if (paymentStatus === 'Pending Approval') effectiveVise = 'Pending';
+                                        else if (rawVise === 'active') effectiveVise = 'Active';
+                                        else if (rawVise === 'non active' || rawVise === 'nonactive') effectiveVise = 'Non Active';
+                                        else if (paymentStatus === 'Approved') effectiveVise = 'Active';
+                                        else if (!isNaN(rpYear)) effectiveVise = rpYear >= currentYear ? 'Active' : 'Non Active';
+                                        else if (String(viewRecord.status || '').toLowerCase() === 'active') effectiveVise = 'Active';
+                                        else effectiveVise = viewRecord.renewal_date_vise || '-';
+
+                                        const isActive = effectiveVise === 'Active';
+                                        const isNonActive = effectiveVise === 'Non Active';
+                                        const isPending = effectiveVise === 'Pending';
                                         return (
                                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 0', borderBottom: `1px solid ${theme.border}` }}>
                                                 <span style={{ fontSize: 12, fontWeight: 600, color: theme.text2, minWidth: 140 }}>Renewal Date Vise</span>
                                                 <span style={{
                                                     display: 'inline-flex', alignItems: 'center', gap: 5,
-                                                    background: isActive ? '#f0fdf4' : isNonActive ? '#fff7ed' : '#f8fafc',
-                                                    border: `1px solid ${isActive ? '#bbf7d0' : isNonActive ? '#fed7aa' : '#e2e8f0'}`,
-                                                    color: isActive ? '#15803d' : isNonActive ? '#c2410c' : theme.text2,
+                                                    background: isActive ? '#f0fdf4' : isNonActive ? '#fef2f2' : isPending ? '#eff6ff' : '#f8fafc',
+                                                    border: `1px solid ${isActive ? '#bbf7d0' : isNonActive ? '#fecaca' : isPending ? '#bfdbfe' : '#e2e8f0'}`,
+                                                    color: isActive ? '#15803d' : isNonActive ? '#dc2626' : isPending ? '#2563eb' : theme.text2,
                                                     borderRadius: 20, padding: '2px 10px', fontSize: 11, fontWeight: 700,
                                                 }}>
-                                                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: isActive ? '#16a34a' : isNonActive ? '#ea580c' : '#94a3b8', display: 'inline-block' }} />
-                                                    {vise || '-'}
+                                                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: isActive ? '#16a34a' : isNonActive ? '#dc2626' : isPending ? '#2563eb' : '#94a3b8', display: 'inline-block' }} />
+                                                    {effectiveVise}
                                                 </span>
                                             </div>
                                         );
@@ -5072,27 +6010,54 @@ export default function MCManagementBackend({ currentUser }) {
 
                                     {/* AGM Date Vise - badge style */}
                                     {(() => {
-                                        const vise = String(viewRecord.agm_date_vise || '').trim();
-                                        const isActive = vise.toLowerCase() === 'active';
-                                        const isNonActive = vise.toLowerCase() === 'non active' || vise.toLowerCase() === 'nonactive';
+                                        const rawAgmVise = String(viewRecord.agm_date_vise || '').trim().toLowerCase();
+                                        let effectiveAgmVise;
+                                        if (rawAgmVise === 'active') effectiveAgmVise = 'Active';
+                                        else if (rawAgmVise === 'non active' || rawAgmVise === 'nonactive') effectiveAgmVise = 'Non Active';
+                                        else if (viewRecord.next_agm_date) {
+                                            const nextD = new Date(viewRecord.next_agm_date);
+                                            const today = new Date();
+                                            today.setHours(0, 0, 0, 0);
+                                            effectiveAgmVise = (!Number.isNaN(nextD.getTime()) && nextD >= today) ? 'Active' : 'Non Active';
+                                        } else if (viewRecord.agm_date) {
+                                            const agmD = new Date(viewRecord.agm_date);
+                                            const oneYearAgo = new Date();
+                                            oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+                                            effectiveAgmVise = (!Number.isNaN(agmD.getTime()) && agmD >= oneYearAgo) ? 'Active' : 'Non Active';
+                                        } else {
+                                            effectiveAgmVise = viewRecord.agm_date_vise || '-';
+                                        }
+
+                                        const isActive = effectiveAgmVise === 'Active';
+                                        const isNonActive = effectiveAgmVise === 'Non Active';
                                         return (
                                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 0', borderBottom: `1px solid ${theme.border}` }}>
                                                 <span style={{ fontSize: 12, fontWeight: 600, color: theme.text2, minWidth: 140 }}>AGM Date Vise</span>
                                                 <span style={{
                                                     display: 'inline-flex', alignItems: 'center', gap: 5,
-                                                    background: isActive ? '#f0fdf4' : isNonActive ? '#fff7ed' : '#f8fafc',
-                                                    border: `1px solid ${isActive ? '#bbf7d0' : isNonActive ? '#fed7aa' : '#e2e8f0'}`,
-                                                    color: isActive ? '#15803d' : isNonActive ? '#c2410c' : theme.text2,
+                                                    background: isActive ? '#f0fdf4' : isNonActive ? '#fef2f2' : '#f8fafc',
+                                                    border: `1px solid ${isActive ? '#bbf7d0' : isNonActive ? '#fecaca' : '#e2e8f0'}`,
+                                                    color: isActive ? '#15803d' : isNonActive ? '#dc2626' : theme.text2,
                                                     borderRadius: 20, padding: '2px 10px', fontSize: 11, fontWeight: 700,
                                                 }}>
-                                                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: isActive ? '#16a34a' : isNonActive ? '#ea580c' : '#94a3b8', display: 'inline-block' }} />
-                                                    {vise || '-'}
+                                                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: isActive ? '#16a34a' : isNonActive ? '#dc2626' : '#94a3b8', display: 'inline-block' }} />
+                                                    {effectiveAgmVise}
                                                 </span>
                                             </div>
                                         );
                                     })()}
 
-                                    <ViewField label="Next Renewal Date" value={formatDisplayDate(viewRecord.next_renewal_date)} />
+                                    {(() => {
+                                        let effNextRenewalDate = viewRecord.next_renewal_date;
+                                        if (!effNextRenewalDate && viewRecord.renewal_period) {
+                                            const rpMatches = String(viewRecord.renewal_period).match(/\b(19|20)\d{2}\b/g);
+                                            const rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(viewRecord.renewal_period, 10);
+                                            if (!isNaN(rpYear)) {
+                                                effNextRenewalDate = `${rpYear}-12-31`;
+                                            }
+                                        }
+                                        return <ViewField label="Next Renewal Date" value={formatDisplayDate(effNextRenewalDate)} />;
+                                    })()}
                                     {(() => {
                                         const info = getRenewalAmountInfo(viewRecord, settings);
                                         if (!info) return null;
@@ -5743,16 +6708,45 @@ export default function MCManagementBackend({ currentUser }) {
             {/* Acknowledgement Letter Modal - view/print, shown once a renewal fee is marked as paid */}
             {ackModalOpen && viewRecord && (
                 <div className="mc-overlay" onClick={(e) => e.target === e.currentTarget && setAckModalOpen(false)}>
-                    <div className="mc-modal" style={{ maxWidth: 720, display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
+                    <div className="mc-modal" style={{ maxWidth: 820, display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
                         <div className="mc-modal-header">
                             <span style={{ fontSize: 16, fontWeight: 700 }}>Acknowledgement Letter</span>
                             <button onClick={() => setAckModalOpen(false)} className="mc-close-btn"><i className="fas fa-times" /></button>
                         </div>
                         <div style={{ padding: 22, overflowY: 'auto', flex: 1 }}>
                             <>
-                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginBottom: 14 }}>
-                                    <button onClick={emailAcknowledgement} className="mc-btn-primary" style={{ padding: '9px 14px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '5px' }}><i className="fas fa-envelope" /> Email Acknowledgement</button>
-                                    <button onClick={printAcknowledgement} className="mc-btn-primary" style={{ padding: '9px 14px' }}><i className="fas fa-print" /> Print Acknowledgement</button>
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginBottom: 14, alignItems: 'center', flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: 2 }}>
+                                    {ackSaved && (
+                                        <div style={{ fontSize: 11.5, color: '#16a34a', display: 'flex', alignItems: 'center', gap: 4, marginRight: 'auto', flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 600 }}>
+                                            <i className="fas fa-check-circle" /> Saved locally
+                                        </div>
+                                    )}
+                                    <button
+                                        onClick={() => setShowAckToolbar(prev => !prev)}
+                                        className="mc-btn-outline"
+                                        style={{ padding: '6px 11px', borderRadius: '5px', display: 'inline-flex', alignItems: 'center', gap: 5, color: '#0284c7', borderColor: '#0284c7', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', background: '#fff' }}
+                                        title="Toggle text editing formatting tools"
+                                    >
+                                        <i className="fas fa-edit" /> {showAckToolbar ? 'Hide Tools' : 'Edit Tools'}
+                                    </button>
+                                    <button
+                                        onClick={handleUndoAck}
+                                        className="mc-btn-outline"
+                                        style={{ padding: '6px 11px', borderRadius: '5px', color: '#b45309', borderColor: '#d97706', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', background: '#fff' }}
+                                        title="Reset all edits back to defaults"
+                                    >
+                                        <i className="fas fa-undo" /> Undo All
+                                    </button>
+                                    <button
+                                        onClick={handleSaveAck}
+                                        className="mc-btn-outline"
+                                        style={{ padding: '6px 11px', borderRadius: '5px', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', background: '#fff' }}
+                                        title="Save letter changes"
+                                    >
+                                        <i className="fas fa-save" /> Save Changes
+                                    </button>
+                                    <button onClick={emailAcknowledgement} className="mc-btn-primary" style={{ padding: '6px 12px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '5px', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer' }}><i className="fas fa-envelope" /> Email Acknowledgement</button>
+                                    <button onClick={printAcknowledgement} className="mc-btn-primary" style={{ padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer' }}><i className="fas fa-print" /> Print Acknowledgement</button>
                                 </div>
                                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 15, background: '#f8fafc', padding: 15, borderRadius: 8, border: '1px solid #e2e8f0' }}>
                                     <div style={{ width: '100%', fontSize: 13, fontWeight: 'bold', marginBottom: 5, color: '#334155' }}>Edit Letter Variables:</div>
@@ -5869,7 +6863,12 @@ export default function MCManagementBackend({ currentUser }) {
                                         </div>
                                     </div>
                                 </div>
-                                <div style={{ border: `1px solid ${theme.border}`, borderRadius: 10 }}>
+                                <div style={{ marginBottom: 10, padding: '8px 12px', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, fontSize: 12, color: '#0369a1', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <i className="fas fa-pencil-alt" style={{ fontSize: 11 }} />
+                                    <span>Click on any text in the letter below to edit it directly. Changes are reflected immediately.</span>
+                                </div>
+                                {showAckToolbar && <RichTextToolbar style={{ marginBottom: 0, borderRadius: '8px 8px 0 0' }} />}
+                                <div key={ackRenderKey} style={{ border: `1px solid ${theme.border}`, borderTop: showAckToolbar ? 'none' : `1px solid ${theme.border}`, borderRadius: showAckToolbar ? '0 0 8px 8px' : 10, background: '#fff' }}>
                                     {renderAcknowledgementLetter(viewRecord)}
                                 </div>
                                 <div className="print-ack">{renderAcknowledgementLetter(viewRecord)}</div>
@@ -6060,66 +7059,105 @@ export default function MCManagementBackend({ currentUser }) {
                 </div>
             )}
 
-            {/* Hidden print output - rendered at the root level so it's not affected by modal CSS during print */}
-            {invoiceModalOpen && invoiceRecord && !invoiceRecord._isRenewal && renderInvoiceReceipt(invoiceRecord, false)}
+
 
             {/* ── Renewal Letter Edit Modal ─────────────────────────────────── */}
             {rlLetterModalOpen && rlLetterRecord && (
                 <div className="mc-overlay" onClick={(e) => { if (e.target === e.currentTarget) setRlLetterModalOpen(false); }}>
-                    <div className="mc-modal" style={{ maxWidth: 720, display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
+                    <div className="mc-modal" style={{ maxWidth: 820, display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
                         <div className="mc-modal-header">
                             <span style={{ fontSize: 16, fontWeight: 700 }}>Edit Renewal Letter</span>
-                            <span style={{ fontSize: 12, color: '#64748b', marginLeft: 8 }}>{invoiceRecord.file_no || invoiceRecord.invoice_number}</span>
+                            <span style={{ fontSize: 12, color: '#64748b', marginLeft: 8 }}>{rlLetterRecord?.file_no || rlLetterRecord?.new_file_no || rlLetterRecord?.invoice_number || ''}</span>
                             <button onClick={() => setRlLetterModalOpen(false)} className="mc-close-btn"><i className="fas fa-times" /></button>
                         </div>
                         <div style={{ padding: 22, overflowY: 'auto', flex: 1 }}>
                             <>
-                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginBottom: 14, alignItems: 'center' }}>
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginBottom: 14, alignItems: 'center', flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: 2 }}>
                                     {rlSaved && (
-                                        <div style={{ fontSize: 12, color: '#16a34a', display: 'flex', alignItems: 'center', gap: 5, marginRight: 'auto' }}>
+                                        <div style={{ fontSize: 11.5, color: '#16a34a', display: 'flex', alignItems: 'center', gap: 4, marginRight: 'auto', flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 600 }}>
                                             <i className="fas fa-check-circle" /> Saved locally
                                         </div>
                                     )}
+                                    <button
+                                        onClick={() => setShowRlToolbar(prev => !prev)}
+                                        className="mc-btn-outline"
+                                        style={{ padding: '6px 11px', borderRadius: '5px', display: 'inline-flex', alignItems: 'center', gap: 5, color: '#0284c7', borderColor: '#0284c7', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', background: '#fff' }}
+                                        title="Toggle text editing formatting tools"
+                                    >
+                                        <i className="fas fa-edit" /> {showRlToolbar ? 'Hide Tools' : 'Edit Tools'}
+                                    </button>
                                     {/* Undo — reset to original computed values */}
                                     <button
-                                        onClick={() => { setRlOverrides(rlDefaultOverrides); setRlSaved(false); }}
+                                        onClick={() => {
+                                            const freshToday = getTodayDotDate();
+                                            const resetDefaults = { ...(rlDefaultOverrides || {}), date: freshToday, isManualDate: false, customLetterHtml: null };
+                                            rlOverridesRef.current = resetDefaults;
+                                            setRlOverrides(resetDefaults);
+                                            try {
+                                                localStorage.removeItem(getRlStorageKey(rlLetterRecord));
+                                            } catch {}
+                                            setRlSaved(false);
+                                            setLetterRenderKey(prev => prev + 1);
+                                            showToast('Reset letter back to original defaults! ↺', 'info');
+                                        }}
                                         className="mc-btn-outline"
-                                        style={{ padding: '9px 14px', borderRadius: '5px', color: '#b45309', borderColor: '#d97706' }}
+                                        style={{ padding: '6px 11px', borderRadius: '5px', color: '#b45309', borderColor: '#d97706', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', background: '#fff' }}
                                         title="Reset all edits back to defaults"
                                     >
                                         <i className="fas fa-undo" /> Undo All
                                     </button>
                                     <button
                                         onClick={() => {
-                                            saveRlOverrides(invoiceRecord, rlOverrides);
+                                            const el = document.getElementById('rl-letter-content-render');
+                                            const customHtml = el ? el.innerHTML : null;
+                                            const toSave = {
+                                                ...rlOverridesRef.current,
+                                                customLetterHtml: customHtml
+                                            };
+                                            rlOverridesRef.current = toSave;
+                                            setRlOverrides(toSave);
+                                            saveRlOverrides(rlLetterRecord, toSave);
                                             setRlSaved(true);
-                                            showToast('Letter settings saved!', 'success');
+                                            showToast('Letter settings saved successfully! ✅', 'success');
                                         }}
                                         className="mc-btn-outline"
-                                        style={{ padding: '9px 14px', borderRadius: '5px' }}
+                                        style={{ padding: '6px 11px', borderRadius: '5px', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', background: '#fff' }}
                                     >
                                         <i className="fas fa-save" /> Save Changes
                                     </button>
                                     <button
                                         onClick={() => {
-                                            saveRlOverrides(rlLetterRecord, rlOverrides);
+                                            const el = document.getElementById('rl-letter-content-render');
+                                            const customHtml = el ? el.innerHTML : null;
+                                            const toSave = {
+                                                ...rlOverridesRef.current,
+                                                customLetterHtml: customHtml
+                                            };
+                                            rlOverridesRef.current = toSave;
+                                            setRlOverrides(toSave);
+                                            saveRlOverrides(rlLetterRecord, toSave);
                                             setRlLetterModalOpen(false);
-                                            printRenewalWithCoveringLetter(rlLetterRecord, rlOverrides);
+                                            printRenewalWithCoveringLetter(rlLetterRecord, toSave);
                                         }}
                                         className="mc-btn-primary"
-                                        style={{ padding: '9px 14px' }}
+                                        style={{ padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer' }}
                                     >
                                         <i className="fas fa-print" /> Print Letter
                                     </button>
                                 </div>
                                 <div style={{ marginBottom: 10, padding: '8px 12px', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, fontSize: 12, color: '#0369a1', display: 'flex', alignItems: 'center', gap: 6 }}>
                                     <i className="fas fa-pencil-alt" style={{ fontSize: 11 }} />
-                                    Click on any text in the letter below to edit it directly. Changes are reflected immediately.
+                                    <span>Click on any text in the letter below to edit it directly. Changes are reflected immediately.</span>
                                 </div>
-                                <div style={{ border: `1px solid ${theme.border}`, borderRadius: 10, padding: '8px 4px' }}>
+                                {showRlToolbar && <RichTextToolbar style={{ marginBottom: 0, borderRadius: '8px 8px 0 0' }} />}
+                                <div key={letterRenderKey} id="rl-letter-content-render" style={{ border: `1px solid ${theme.border}`, borderTop: showRlToolbar ? 'none' : `1px solid ${theme.border}`, borderRadius: showRlToolbar ? '0 0 8px 8px' : 10, padding: '8px 4px', background: '#fff' }}>
                                     {renderRenewalCoveringLetter(
                                         { ...rlLetterRecord, _rlOverrides: rlOverrides },
-                                        (patch) => setRlOverrides(prev => ({ ...prev, ...patch }))
+                                        (patch) => {
+                                            rlOverridesRef.current = { ...rlOverridesRef.current, ...patch };
+                                            setRlOverrides(rlOverridesRef.current);
+                                            setRlSaved(false);
+                                        }
                                     )}
                                 </div>
                             </>

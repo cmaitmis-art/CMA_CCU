@@ -271,11 +271,11 @@ const pillBtn = (active, color = theme.maroon) => ({
 function SectionCard({ children, style }) {
   return (
     <div
+      className="section-card"
       style={{
         background: theme.card,
         border: `1px solid ${theme.border}`,
         borderRadius: 14,
-        padding: "26px 28px",
         boxShadow: "0 4px 18px rgba(44,10,10,.06)",
         ...style,
       }}
@@ -549,6 +549,9 @@ export default function MCRenewalPortal({
   const [allRenewals, setAllRenewals] = useState([]);
   const [loadingDashboard, setLoadingDashboard] = useState(false);
   const [draft, setDraft] = useState(null);
+  const [mcSearchResults, setMcSearchResults] = useState([]);
+  const [searchingMC, setSearchingMC] = useState(false);
+  const dashSearchTimer = useRef(null);
 
   const [step, setStep] = useState(1);
 
@@ -1166,16 +1169,7 @@ export default function MCRenewalPortal({
 
         {portalView === "dashboard" && (
           <SectionCard>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 24,
-                flexWrap: "wrap",
-                gap: 14,
-              }}
-            >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, flexWrap: "wrap", gap: 14 }}>
               <div>
                 <h2
                   style={{
@@ -1191,14 +1185,34 @@ export default function MCRenewalPortal({
                   Logged in as: <b>{activeUser?.name || "Guest"}</b>
                 </p>
               </div>
-              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
                 <div style={{ position: 'relative', minWidth: 240 }}>
                   <i className="fas fa-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#999', fontSize: 13 }}></i>
                   <input
+                    id="dashboardSearchInput"
+                    name="dashboardSearchInput"
                     type="text"
                     placeholder="Search Plan No or Name..."
                     value={dashboardSearchQuery}
-                    onChange={(e) => setDashboardSearchQuery(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setDashboardSearchQuery(val);
+                      // Debounce MC search
+                      clearTimeout(dashSearchTimer.current);
+                      if (val.trim().length >= 2) {
+                        setSearchingMC(true);
+                        dashSearchTimer.current = setTimeout(async () => {
+                          try {
+                            const results = await renewalApi.searchMC(val.trim(), 'all');
+                            setMcSearchResults(results || []);
+                          } catch (e) { setMcSearchResults([]); }
+                          finally { setSearchingMC(false); }
+                        }, 400);
+                      } else {
+                        setMcSearchResults([]);
+                        setSearchingMC(false);
+                      }
+                    }}
                     style={{
                       padding: "8px 12px 8px 30px",
                       border: `1px solid ${theme.border}`,
@@ -1239,11 +1253,11 @@ export default function MCRenewalPortal({
               </div>
             ) : (
               <div
+                className="table-scroll-container"
                 style={{
                   background: "#fff",
                   border: `1px solid ${theme.border}`,
                   borderRadius: 10,
-                  overflowX: "auto",
                   overflowY: "hidden",
                 }}
               >
@@ -1430,12 +1444,28 @@ export default function MCRenewalPortal({
                           }
                         }
                       } else {
+                        // Filter submitted renewals
                         filtered = allRenewals.filter((r) => {
                           const combined = `${r.plan_no || ""} ${r.mc_name || ""} ${r.ref_no || ""} ${r.applicant_name || ""}`.toLowerCase();
                           return terms.every(t => combined.includes(t));
                         });
 
-                        if (filtered.length === 0) {
+                        // Also include MC/MCom records from direct search (not already in renewals)
+                        const existingPlanNos = new Set(filtered.map(r => (r.plan_no || '').toLowerCase()));
+                        const mcRows = mcSearchResults
+                          .filter(mc => !existingPlanNos.has((mc.planNo || '').toLowerCase()))
+                          .map(mc => ({
+                            _isMcRecord: true,
+                            ref_no: null,
+                            status: null,
+                            plan_no: mc.planNo,
+                            mc_name: mc.name,
+                            amount: null,
+                            _mcData: mc,
+                          }));
+                        filtered = [...filtered, ...mcRows];
+
+                        if (filtered.length === 0 && !searchingMC) {
                           return (
                             <tr>
                               <td colSpan="6" style={{ padding: "30px 16px", textAlign: "center", color: theme.text3 }}>
@@ -1444,180 +1474,221 @@ export default function MCRenewalPortal({
                             </tr>
                           );
                         }
+                        if (searchingMC && filtered.length === 0) {
+                          return (
+                            <tr>
+                              <td colSpan="6" style={{ padding: "30px 16px", textAlign: "center", color: theme.text3 }}>
+                                <i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />Searching...
+                              </td>
+                            </tr>
+                          );
+                        }
                       }
 
-                      return filtered.map((r) => (
-                        <tr
-                          key={r.ref_no}
-                          onClick={() => {
-                            setRenewalRecord(r);
-                            setStep(r.status === "active" ? 6 : 5);
-                          }}
-                          style={{ borderBottom: `1px solid ${theme.border}`, cursor: "pointer" }}
-                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#f8fafc")}
-                          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
-                        >
-                          <td style={{ padding: "12px 16px" }}>
-                            <span
+                      return filtered.map((r, idx) => (
+                        r._isMcRecord ? (
+                          <tr
+                            key={`mc-${r.plan_no}-${idx}`}
+                            style={{ borderBottom: `1px solid ${theme.border}`, background: '#fffbeb' }}
+                          >
+                            <td style={{ padding: "12px 16px" }}>
+                              <span style={{ fontFamily: fontMono, fontWeight: 600, color: theme.text3, fontStyle: 'italic' }}>—</span>
+                            </td>
+                            <td style={{ padding: "12px 16px" }}>
+                              <span style={{ background: '#f0fdf4', color: '#15803d', padding: '4px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+                                Not Yet Submitted
+                              </span>
+                            </td>
+                            <td style={{ padding: "12px 16px", fontFamily: fontMono, fontSize: 13 }}>{r.plan_no || '-'}</td>
+                            <td style={{ padding: "12px 16px", fontSize: 13 }}>{r.mc_name || '-'}</td>
+                            <td style={{ padding: "12px 16px" }}>—</td>
+                            <td style={{ padding: "12px 16px", textAlign: "center" }}>
+                              <button
+                                onClick={() => {
+                                  setSelectedMC(r._mcData);
+                                  let fName = '', lName = '', email = '';
+                                  if (activeUser) {
+                                    const parts = (activeUser.name || '').split(' ');
+                                    fName = parts[0] || ''; lName = parts.slice(1).join(' ') || '';
+                                    email = activeUser.email || '';
+                                  }
+                                  setApplicant({ ...blankApplicant, firstName: fName, lastName: lName, email });
+                                  setSelectedYears([]);
+                                  setStep(2);
+                                  setPortalView('wizard');
+                                }}
+                                style={{ background: theme.maroon, color: '#fff', border: 'none', padding: '6px 14px', borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                              >
+                                + Start Renewal
+                              </button>
+                            </td>
+                          </tr>
+                        ) : (
+                          <tr
+                            key={r.ref_no || idx}
+                            onClick={() => {
+                              setRenewalRecord(r);
+                              setStep(r.status === "active" ? 6 : 5);
+                            }}
+                            style={{ borderBottom: `1px solid ${theme.border}`, cursor: "pointer" }}
+                            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#f8fafc")}
+                            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+                          >
+
+                            <td style={{ padding: "12px 16px" }}>
+                              <span
+                                style={{
+                                  fontFamily: fontMono,
+                                  fontWeight: 600,
+                                  color: theme.maroon,
+                                }}
+                              >
+                                {r.ref_no}
+                              </span>
+                            </td>
+                            <td style={{ padding: "12px 16px" }}>
+                              {r.status === "pending_approval" ? (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#fffbeb', border: '1px solid #f59e0b', color: '#92400e', padding: '4px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+                                  <span style={{
+                                    width: 7, height: 7, borderRadius: '50%',
+                                    background: '#f59e0b',
+                                    display: 'inline-block',
+                                    animation: 'cma-pulse 1.4s ease-in-out infinite',
+                                  }} />
+                                  Pending Approval
+                                </span>
+                              ) : (
+                                <span style={{
+                                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                                  background: r.status === "active" ? theme.greenBg : r.status === "rejected" ? "#fef2f2" : theme.amberBg,
+                                  color: r.status === "active" ? theme.green : r.status === "rejected" ? "#b91c1c" : "#8a6d00",
+                                  border: r.status === "rejected" ? "1px solid #fca5a5" : "none",
+                                  padding: "4px 10px", borderRadius: 999, fontSize: 11, fontWeight: 700,
+                                }}>
+                                  {r.status === "active" ? "✓ Active" : r.status === "rejected" ? "✕ Rejected" : r.status}
+                                </span>
+                              )}
+                            </td>
+                            <td style={{ padding: "12px 16px" }}>
+                              <div style={{ fontWeight: 600, color: theme.text }}>
+                                {r.plan_no || "-"}
+                              </div>
+                            </td>
+                            <td style={{ padding: "12px 16px" }}>
+                              <div style={{ fontWeight: 600, color: theme.text }}>
+                                {r.mc_name || "-"}
+                              </div>
+                              <div style={{ fontSize: 11.5, color: theme.text3 }}>
+                                Years: {r.years?.join(", ")}
+                              </div>
+                              {r.status === "rejected" && r.reject_reason && (
+                                <div style={{
+                                  marginTop: 4,
+                                  fontSize: 11,
+                                  color: "#b91c1c",
+                                  background: "#fef2f2",
+                                  border: "1px solid #fca5a5",
+                                  borderRadius: 4,
+                                  padding: "3px 7px",
+                                  display: "inline-block",
+                                  maxWidth: 260,
+                                  wordBreak: "break-word",
+                                }}>
+                                  <i className="fas fa-exclamation-circle" style={{ marginRight: 4 }} />
+                                  Reason: {r.reject_reason}
+                                </div>
+                              )}
+                            </td>
+                            <td
                               style={{
+                                padding: "12px 16px",
+                                textAlign: "left",
                                 fontFamily: fontMono,
                                 fontWeight: 600,
-                                color: theme.maroon,
+                                whiteSpace: "nowrap",
                               }}
                             >
-                              {r.ref_no}
-                            </span>
-                          </td>
-                          <td style={{ padding: "12px 16px" }}>
-                            <span
+                              {money(r.amount)}
+                            </td>
+                            <td
                               style={{
-                                background:
-                                  r.status === "active"
-                                    ? theme.greenBg
-                                    : r.status === "rejected"
-                                      ? "#fef2f2"
-                                      : theme.amberBg,
-                                color:
-                                  r.status === "active"
-                                    ? theme.green
-                                    : r.status === "rejected"
-                                      ? "#b91c1c"
-                                      : "#8a6d00",
-                                border: r.status === "rejected" ? "1px solid #fca5a5" : "none",
-                                padding: "4px 10px",
-                                borderRadius: 999,
-                                fontSize: 11,
-                                fontWeight: 700,
+                                padding: "12px 16px",
+                                textAlign: "center",
                               }}
                             >
-                              {r.status === "active"
-                                ? "✓ Active"
-                                : r.status === "pending_approval"
-                                  ? "⏳ Pending Approval"
-                                  : r.status === "rejected"
-                                    ? "✕ Rejected"
-                                    : r.status}
-                            </span>
-                          </td>
-                          <td style={{ padding: "12px 16px" }}>
-                            <div style={{ fontWeight: 600, color: theme.text }}>
-                              {r.plan_no || "-"}
-                            </div>
-                          </td>
-                          <td style={{ padding: "12px 16px" }}>
-                            <div style={{ fontWeight: 600, color: theme.text }}>
-                              {r.mc_name || "-"}
-                            </div>
-                            <div style={{ fontSize: 11.5, color: theme.text3 }}>
-                              Years: {r.years?.join(", ")}
-                            </div>
-                            {r.status === "rejected" && r.reject_reason && (
-                              <div style={{
-                                marginTop: 4,
-                                fontSize: 11,
-                                color: "#b91c1c",
-                                background: "#fef2f2",
-                                border: "1px solid #fca5a5",
-                                borderRadius: 4,
-                                padding: "3px 7px",
-                                display: "inline-block",
-                                maxWidth: 260,
-                                wordBreak: "break-word",
-                              }}>
-                                <i className="fas fa-exclamation-circle" style={{ marginRight: 4 }} />
-                                Reason: {r.reject_reason}
-                              </div>
-                            )}
-                          </td>
-                          <td
-                            style={{
-                              padding: "12px 16px",
-                              textAlign: "left",
-                              fontFamily: fontMono,
-                              fontWeight: 600,
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {money(r.amount)}
-                          </td>
-                          <td
-                            style={{
-                              padding: "12px 16px",
-                              textAlign: "center",
-                            }}
-                          >
-                            {r.status === "active" ? (
-                              <button
-                                type="button"
-                                onClick={(e) => { e.stopPropagation(); downloadReceipt(r); }}
-                                title="Download receipt for this renewal"
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: 6,
-                                  background: theme.greenBg,
-                                  border: `1px solid ${theme.green}`,
-                                  color: theme.green,
-                                  padding: "4px 10px",
-                                  borderRadius: 999,
-                                  fontSize: 11,
-                                  fontWeight: 700,
-                                  cursor: "pointer",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                ⬇ Download
-                              </button>
-                            ) : r.status === "rejected" ? (
-                              <button
-                                type="button"
-                                onClick={(e) => { e.stopPropagation(); startNew(); }}
-                                title="Submit a new payment for this renewal"
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: 6,
-                                  background: "#fef2f2",
-                                  border: "1px solid #b91c1c",
-                                  color: "#b91c1c",
-                                  padding: "4px 10px",
-                                  borderRadius: 999,
-                                  fontSize: 11,
-                                  fontWeight: 700,
-                                  cursor: "pointer",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                Try Again
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setRenewalRecord(r);
-                                  setStep(r.status === "active" ? 6 : 5);
-                                }}
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: 6,
-                                  background: "transparent",
-                                  border: `1px solid ${theme.gold}`,
-                                  color: "#8a6d00",
-                                  padding: "4px 10px",
-                                  borderRadius: 999,
-                                  fontSize: 11,
-                                  fontWeight: 700,
-                                  cursor: "pointer",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                <i className="fas fa-eye"></i> Details
-                              </button>
-                            )}
-                          </td>
-                        </tr>
+                              {r.status === "active" ? (
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); downloadReceipt(r); }}
+                                  title="Download receipt for this renewal"
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 6,
+                                    background: theme.greenBg,
+                                    border: `1px solid ${theme.green}`,
+                                    color: theme.green,
+                                    padding: "4px 10px",
+                                    borderRadius: 999,
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                    cursor: "pointer",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  ⬇ Download
+                                </button>
+                              ) : r.status === "rejected" ? (
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); startNew(); }}
+                                  title="Submit a new payment for this renewal"
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 6,
+                                    background: "#fef2f2",
+                                    border: "1px solid #b91c1c",
+                                    color: "#b91c1c",
+                                    padding: "4px 10px",
+                                    borderRadius: 999,
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                    cursor: "pointer",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  Try Again
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setRenewalRecord(r);
+                                    setStep(r.status === "active" ? 6 : 5);
+                                  }}
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 6,
+                                    background: "transparent",
+                                    border: `1px solid ${theme.gold}`,
+                                    color: "#8a6d00",
+                                    padding: "4px 10px",
+                                    borderRadius: 999,
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                    cursor: "pointer",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  <i className="fas fa-eye"></i> Details
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        )
                       ));
                     })()}
                   </tbody>
@@ -1678,15 +1749,8 @@ export default function MCRenewalPortal({
             </SectionCard>
 
             {/* MAIN CONTENT AREA — steps on the left, live summary on the right */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: step >= 1 && step <= 4 ? "1fr 320px" : "1fr",
-                gap: 24,
-                alignItems: "start",
-              }}
-            >
-              <div style={{ position: "relative" }}>
+            <div className={`responsive-main-grid ${step >= 1 && step <= 4 ? "has-sidebar" : ""}`}>
+              <div className="responsive-content" style={{ position: "relative" }}>
                 {/* --- STEP 1: Search --- */}
                 {step === 1 && (
                   <SectionCard style={{ marginBottom: 0 }}>
@@ -1895,6 +1959,8 @@ export default function MCRenewalPortal({
                                   style={{ padding: "12px", textAlign: "center" }}
                                 >
                                   <input
+                                    id={`yearCheckbox_${yr.year}`}
+                                    name={`yearCheckbox_${yr.year}`}
                                     type="checkbox"
                                     checked={yr.status === 'paid' || yr.status === 'processing' || selectedYears.includes(yr.year)}
                                     disabled={yr.status === 'paid' || yr.status === 'processing'}
@@ -1981,6 +2047,8 @@ export default function MCRenewalPortal({
                           </div>
                           <div style={{ display: 'flex', gap: 0 }}>
                             <select
+                              id="applicantTitle"
+                              name="applicantTitle"
                               value={applicant.title}
                               onChange={(e) => {
                                 setApplicant({
@@ -2008,6 +2076,8 @@ export default function MCRenewalPortal({
                               <option value="Dr.">Dr.</option>
                             </select>
                             <input
+                              id="applicantFirstName"
+                              name="applicantFirstName"
                               type="text"
                               value={applicant.firstName}
                               onChange={(e) => {
@@ -2039,6 +2109,8 @@ export default function MCRenewalPortal({
                             Last Name *
                           </div>
                           <input
+                            id="applicantLastName"
+                            name="applicantLastName"
                             type="text"
                             value={applicant.lastName}
                             onChange={(e) => {
@@ -2064,6 +2136,8 @@ export default function MCRenewalPortal({
                             Telephone No *
                           </div>
                           <input
+                            id="applicantPhone"
+                            name="applicantPhone"
                             type="tel"
                             value={applicant.phone}
                             onChange={(e) => {
@@ -2089,6 +2163,8 @@ export default function MCRenewalPortal({
                             Email (optional)
                           </div>
                           <input
+                            id="applicantEmail"
+                            name="applicantEmail"
                             type="email"
                             value={applicant.email}
                             onChange={(e) => {
@@ -2114,6 +2190,8 @@ export default function MCRenewalPortal({
                             NIC No *
                           </div>
                           <input
+                            id="applicantNic"
+                            name="applicantNic"
                             type="text"
                             value={applicant.nic}
                             onChange={(e) => {
@@ -2136,6 +2214,8 @@ export default function MCRenewalPortal({
                             Address Line 1 *
                           </div>
                           <input
+                            id="applicantAddr1"
+                            name="applicantAddr1"
                             type="text"
                             value={applicant.addr1}
                             onChange={(e) => {
@@ -2161,6 +2241,8 @@ export default function MCRenewalPortal({
                             Address Line 2
                           </div>
                           <input
+                            id="applicantAddr2"
+                            name="applicantAddr2"
                             type="text"
                             value={applicant.addr2}
                             onChange={(e) =>
@@ -2184,6 +2266,8 @@ export default function MCRenewalPortal({
                             Address Line 3
                           </div>
                           <input
+                            id="applicantAddr3"
+                            name="applicantAddr3"
                             type="text"
                             value={applicant.addr3}
                             onChange={(e) =>
@@ -2207,6 +2291,8 @@ export default function MCRenewalPortal({
                             Province *
                           </div>
                           <select
+                            id="applicantProvince"
+                            name="applicantProvince"
                             value={applicant.province}
                             onChange={(e) => {
                               setApplicant({
@@ -2240,6 +2326,8 @@ export default function MCRenewalPortal({
                             District *
                           </div>
                           <select
+                            id="applicantDistrict"
+                            name="applicantDistrict"
                             value={applicant.district}
                             onChange={(e) => {
                               setApplicant({
@@ -2276,6 +2364,8 @@ export default function MCRenewalPortal({
                             City *
                           </div>
                           <input
+                            id="applicantCity"
+                            name="applicantCity"
                             type="text"
                             value={applicant.city}
                             onChange={(e) => {
@@ -2644,15 +2734,19 @@ export default function MCRenewalPortal({
                 application (steps 1-4); not shown on Approval/Complete since
                 that content already has its own status card. */}
               {step >= 1 && step <= 4 && (
-                <SummaryPanel
-                  selectedMC={selectedMC}
-                  selectedYears={selectedYears}
-                  totalDue={totalDue}
-                  applicant={applicant}
-                  step={step}
-                />
+                <div className="responsive-sidebar">
+                  <SummaryPanel
+                    selectedMC={selectedMC}
+                    selectedYears={selectedYears}
+                    totalDue={totalDue}
+                    applicant={applicant}
+                    step={step}
+                  />
+                </div>
               )}
             </div>
+
+
           </div>
         )}
 
@@ -2725,6 +2819,8 @@ export default function MCRenewalPortal({
                   }}
                 >
                   <select
+                    id="searchFilter"
+                    name="searchFilter"
                     value={searchFilter}
                     onChange={(e) => {
                       setSearchFilter(e.target.value);
@@ -2929,6 +3025,79 @@ export default function MCRenewalPortal({
             </div>
           </div>
         )}
+
+        <style>{`
+          .section-card {
+            padding: 26px 28px;
+          }
+          .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 14px;
+          }
+          .dashboard-controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+          }
+          .dashboard-controls-search {
+            position: relative;
+            min-width: 240px;
+          }
+          .table-scroll-container {
+            width: 100%;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+          }
+          .responsive-main-grid {
+            display: grid;
+            gap: 24px;
+            align-items: start;
+          }
+          @media (min-width: 992px) {
+            .responsive-main-grid.has-sidebar {
+              grid-template-columns: 1fr 320px;
+            }
+          }
+          @media (max-width: 991px) {
+            .responsive-main-grid {
+              grid-template-columns: 1fr;
+            }
+            .responsive-sidebar {
+              grid-row: 1;
+              margin-bottom: 20px;
+            }
+            .responsive-content {
+              grid-row: 2;
+            }
+          }
+          @media (max-width: 768px) {
+            .section-card {
+              padding: 16px 12px !important;
+            }
+            .dashboard-controls {
+              flex-direction: column;
+              align-items: stretch;
+              width: 100%;
+            }
+            .dashboard-controls-search {
+              min-width: 0 !important;
+              width: 100%;
+            }
+            .dashboard-controls-search input {
+              width: 100%;
+              box-sizing: border-box;
+            }
+            .dashboard-controls button {
+              width: 100%;
+              justify-content: center;
+            }
+          }
+        `}</style>
 
       </div>
     </div>

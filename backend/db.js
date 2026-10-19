@@ -33,18 +33,40 @@ if (sequelizeModule.Model && !sequelizeModule.Model.prototype.findByPk) {
 const { Sequelize } = require('sequelize');
 const bcrypt = require('bcryptjs');
 const initializeModels = require('./models');
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 require('dotenv').config();
 
+const cleanEnv = (val) => {
+  if (!val) return '';
+  let s = String(val).trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1);
+  }
+  return s.trim();
+};
+
 // ── Step 1: Create the Sequelize connection ─────────────────────────────────
-const dbName = process.env.DB_NAME || 'cma_db';
-const dbUser = process.env.DB_USER || 'root';
-const dbPass = process.env.DB_PASS || '';
-const dbHost = process.env.DB_HOST || 'localhost';
+const dbName = cleanEnv(process.env.DB_NAME) || 'cma_db';
+const dbUser = cleanEnv(process.env.DB_USER) || 'root';
+const dbPass = cleanEnv(process.env.DB_PASS) || '';
+const dbHost = cleanEnv(process.env.DB_HOST) || 'localhost';
+const dbPort = process.env.DB_PORT ? parseInt(cleanEnv(process.env.DB_PORT), 10) : 3306;
 
 const sequelize = new Sequelize(dbName, dbUser, dbPass, {
   host: dbHost,
+  port: dbPort,
   dialect: 'mysql',
   logging: false,
+  pool: {
+    max: 10,
+    min: 0,
+    acquire: 30000,
+    idle: 10000,
+    afterCreate: (connection, done) => {
+      connection.query('SET SESSION sql_mode = ""', (err) => done(err, connection));
+    }
+  }
 });
 
 // ── Step 2: Load all model definitions ──────────────────────────────────────
@@ -90,7 +112,7 @@ const ready = sequelize
     console.error('  name:', err?.name);
     console.error('  message:', err?.message);
     console.error('  stack:', err?.stack);
-    process.exit(1);
+    // Keep process alive so Express can serve the frontend and report API status
   });
 
 module.exports = {

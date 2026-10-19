@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import './Sidebar.css';
 import { getRoleLabel } from '../utils/roleLabel.js';
 import { CMA_LOGO_BASE64 } from '../utils/logoBase64.js';
-import { fetchNotifications } from '../api';
+import { fetchNotifications, fetchRenewals } from '../api';
 
 function Sidebar({ currentUser, currentPage, onNavigate, isOpen, onToggleOpen, isCollapsed, onToggleCollapse }) {
   const [avatarError, setAvatarError] = useState(false);
@@ -15,6 +15,7 @@ function Sidebar({ currentUser, currentPage, onNavigate, isOpen, onToggleOpen, i
   const [unreadCount, setUnreadCount] = useState(0);
   const [cfilesCount, setCfilesCount] = useState(0);
   const [complaintsCount, setComplaintsCount] = useState(0);
+  const [renewalsCount, setRenewalsCount] = useState(0);
 
   useEffect(() => {
     if (currentUser?.id) {
@@ -47,6 +48,22 @@ function Sidebar({ currentUser, currentPage, onNavigate, isOpen, onToggleOpen, i
   useEffect(() => {
     setNavigatingTo(null);
   }, [currentPage]);
+
+  useEffect(() => {
+    if (currentUser?.id) {
+      const loadRenewalsCount = async () => {
+        try {
+          const res = await fetchRenewals();
+          if (Array.isArray(res)) {
+            setRenewalsCount(res.filter(r => r.status === 'pending_approval').length);
+          }
+        } catch (err) {}
+      };
+      loadRenewalsCount();
+      window.addEventListener('cma:new-notification', loadRenewalsCount);
+      return () => window.removeEventListener('cma:new-notification', loadRenewalsCount);
+    }
+  }, [currentUser?.id]);
 
   useEffect(() => {
     if (currentUser?.id) {
@@ -84,7 +101,7 @@ function Sidebar({ currentUser, currentPage, onNavigate, isOpen, onToggleOpen, i
   const navItems = [
     { id: 'dashboard', icon: 'fas fa-th-large', label: 'Dashboard', section: 'Main' },
     { id: 'registration', icon: 'fas fa-file-signature', label: 'Registration Form', section: 'Main' },
-    { id: 'renewal_approval', icon: 'fas fa-check-circle', label: 'Renewal Approvals', section: 'Main' },
+    { id: 'renewal_approval', icon: 'fas fa-check-circle', label: 'Renewal Approvals', section: 'Main', badge: renewalsCount > 0 ? renewalsCount : null },
     { id: 'mc', icon: 'fas fa-building', label: 'MC Management', section: 'Modules' },
     { id: 'mcom', icon: 'fas fa-city', label: 'M.Com Management', section: 'Modules' },
     { id: 'cfiles', icon: 'fas fa-folder-open', label: 'C Files', section: 'Modules', badge: cfilesCount > 0 ? cfilesCount : null },

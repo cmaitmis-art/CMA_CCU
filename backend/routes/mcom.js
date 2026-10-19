@@ -48,8 +48,103 @@ const WRITABLE_COLS = [
 ];
 
 /**
+ * Strip ISO timestamp suffix from date values.
+ * '2026-04-28T00:00:00.000Z' → '2026-04-28'
+ */
+const MCOM_DATE_COLS = [
+  'reg_date', 'agm_date', 'next_agm_date', 'next_renewal_date',
+  'renewal_paid_date', 'acknowledgement_date', 'awareness_date',
+];
+
+/**
+ * Strip ISO timestamp suffix from date fields and normalize valid dates.
+ * '2026-04-28T00:00:00.000Z' → '2026-04-28'
+ * '15/04/2024' → '2024-04-15'
+ * Excel serial numbers (e.g. 44561) → '2021-12-31'
+ * Already-clean YYYY-MM-DD values are returned unchanged.
+ * Non-date placeholders ('_', '-', 'N/A', etc.) or unparseable values → null
+ * null/undefined/''/falsy → null
+ */
+function sanitizeDateValue(v) {
+  if (v === null || v === undefined) return null;
+  if (v instanceof Date) {
+    return isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
+  }
+  if (typeof v === 'number') {
+    if (v >= 1000 && v <= 100000) {
+      const epoch = new Date(Date.UTC(1899, 11, 30));
+      epoch.setUTCDate(epoch.getUTCDate() + Math.floor(v));
+      return epoch.toISOString().slice(0, 10);
+    }
+    return null;
+  }
+  const s = String(v).trim();
+  if (!s) return null;
+  // Non-date placeholders like '_', '-', '--', '.... / .... / ....', 'n/a', etc.
+  if (/^[_.\-\/\s]+$/.test(s) || /^(n\/?a|nil|none|null|undefined|pending|tbd|\?|0000-00-00|00\/00\/0000|not\s+applicable|not\s+yet)$/i.test(s)) {
+    return null;
+  }
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // ISO with time: 2023-10-11T00:00:00.000Z or 2023-10-11 00:00:00
+  const isoMatch = s.match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
+  if (isoMatch) return isoMatch[1];
+  // YYYY/MM/DD or YYYY.MM.DD
+  const ymdMatch = s.match(/^(\d{4})[./](\d{1,2})[./](\d{1,2})$/);
+  if (ymdMatch) {
+    const y = ymdMatch[1];
+    const m = ymdMatch[2].padStart(2, '0');
+    const d = ymdMatch[3].padStart(2, '0');
+    if (parseInt(m, 10) >= 1 && parseInt(m, 10) <= 12 && parseInt(d, 10) >= 1 && parseInt(d, 10) <= 31) {
+      return `${y}-${m}-${d}`;
+    }
+  }
+  // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+  const dmyMatch = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  if (dmyMatch) {
+    const day = parseInt(dmyMatch[1], 10);
+    const month = parseInt(dmyMatch[2], 10);
+    const year = parseInt(dmyMatch[3], 10);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 1900 && year <= 2100) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+  // Excel serial number as string (e.g. "44561")
+  if (/^\d{4,5}$/.test(s)) {
+    const num = parseInt(s, 10);
+    if (num >= 1000 && num <= 99999) {
+      const epoch = new Date(Date.UTC(1899, 11, 30));
+      epoch.setUTCDate(epoch.getUTCDate() + num);
+      return epoch.toISOString().slice(0, 10);
+    }
+  }
+  // Fallback: parse with JS Date
+  const parsed = new Date(s);
+  if (!isNaN(parsed.getTime())) {
+    const yr = parsed.getFullYear();
+    if (yr >= 1900 && yr <= 2100) {
+      const mm = String(parsed.getMonth() + 1).padStart(2, '0');
+      const dd = String(parsed.getDate()).padStart(2, '0');
+      return `${yr}-${mm}-${dd}`;
+    }
+  }
+  // Never return an unparsed raw string for a DATE column!
+  return null;
+}
+
+function sanitizeDates(data) {
+  for (const col of MCOM_DATE_COLS) {
+    if (col in data) {
+      data[col] = sanitizeDateValue(data[col]);
+    }
+  }
+  return data;
+}
+
+/**
  * Pick only allowed keys from the request body.
  * Converts empty strings to null for clean database storage.
+ * Also sanitizes date fields to plain YYYY-MM-DD.
  */
 function pickWritable(body) {
   const out = {};
@@ -58,7 +153,7 @@ function pickWritable(body) {
       out[col] = body[col] === '' ? null : body[col];
     }
   }
-  return out;
+  return sanitizeDates(out);
 }
 
 /**
@@ -89,11 +184,97 @@ function resolveFileNo(body, data) {
   return data.new_file_no || data.old_file_no || null;
 }
 
+function getMcomEffectiveStatus(r) {
+  if (!r) return 'Active';
+  const p = r.renewal_payment_status;
+  const a = (r.active_non_active || '').trim().toLowerCase();
+  const v = (r.renewal_date_vise || '').trim().toLowerCase();
+  const currentYear = new Date().getFullYear();
+  const yr = parseInt(r.renewal_period, 10);
+
+  if (p === 'Pending Approval' || r.status === 'Pending') return 'Pending';
+  if (a === 'non active' || a === 'nonactive' || a === 'inactive' || v === 'non active' || v === 'nonactive' || v === 'inactive' || r.status === 'Non Active') return 'Non Active';
+  if (a === 'active' || v === 'active' || r.status === 'Active' || p === 'Approved') return 'Active';
+  if (yr && yr < currentYear) return 'Non Active';
+  return 'Active';
+}
+
+function deriveMcomFields(data) {
+  const currentYear = new Date().getFullYear();
+
+  // 1. Derive / normalize renewal_date_vise
+  if (data.renewal_date_vise) {
+    const rawLower = String(data.renewal_date_vise).toLowerCase().trim();
+    if (rawLower.includes('non') || rawLower.includes('inactive')) {
+      data.renewal_date_vise = 'Non Active';
+    } else if (rawLower.includes('active')) {
+      data.renewal_date_vise = 'Active';
+    }
+  } else {
+    if (data.renewal_payment_status === 'Approved') {
+      data.renewal_date_vise = 'Active';
+    } else if (data.renewal_payment_status === 'Pending Approval') {
+      data.renewal_date_vise = 'Non Active';
+    } else if (data.renewal_period) {
+      const rpMatches = String(data.renewal_period).match(/\b(19|20)\d{2}\b/g);
+      const rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(data.renewal_period, 10);
+      if (!isNaN(rpYear)) {
+        data.renewal_date_vise = rpYear >= currentYear ? 'Active' : 'Non Active';
+      }
+    } else if (data.status === 'Active' || data.active_non_active === 'Active') {
+      data.renewal_date_vise = 'Active';
+    }
+  }
+
+  if (!data.active_non_active && data.renewal_date_vise) {
+    data.active_non_active = data.renewal_date_vise;
+  }
+  if (!data.renewal_status && data.renewal_date_vise) {
+    data.renewal_status = data.renewal_date_vise;
+  }
+
+  // 2. Derive / normalize next_renewal_date
+  if (!data.next_renewal_date && data.renewal_period) {
+    const rpMatches = String(data.renewal_period).match(/\b(19|20)\d{2}\b/g);
+    const rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(data.renewal_period, 10);
+    if (!isNaN(rpYear)) {
+      data.next_renewal_date = `${rpYear}-12-31`;
+    }
+  }
+
+  // 3. Derive / normalize agm_date_vise
+  if (data.agm_date_vise) {
+    const rawLower = String(data.agm_date_vise).toLowerCase().trim();
+    if (rawLower.includes('non') || rawLower.includes('inactive')) {
+      data.agm_date_vise = 'Non Active';
+    } else if (rawLower.includes('active')) {
+      data.agm_date_vise = 'Active';
+    }
+  } else {
+    if (data.next_agm_date) {
+      const nextD = new Date(data.next_agm_date);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      data.agm_date_vise = (!Number.isNaN(nextD.getTime()) && nextD >= today) ? 'Active' : 'Non Active';
+    } else if (data.agm_date) {
+      const agmD = new Date(data.agm_date);
+      const oneYearAgo = new Date();
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+      data.agm_date_vise = (!Number.isNaN(agmD.getTime()) && agmD >= oneYearAgo) ? 'Active' : 'Non Active';
+    }
+  }
+  if (!data.agm_status && data.agm_date_vise) {
+    data.agm_status = data.agm_date_vise;
+  }
+
+  return data;
+}
+
 // ── GET /api/mcom ─ Paginated + filtered list ───────────────────────────────
 // Query params: ?q=search &status=Active &year=2024 &category=A &page=1 &limit=20
 router.get('/', async (req, res) => {
   try {
-    const { q, searchField, status, year, month, category, mc_mcom, renewalPeriod, agmYear, page = 1, limit = 20 } = req.query;
+    const { q, searchField, status, year, month, category, mc_mcom, renewalPeriod, agmYear, town, page = 1, limit = 20 } = req.query;
     const offset = (Math.max(1, Number(page)) - 1) * Math.max(1, Number(limit));
 
     const where = {};
@@ -144,7 +325,17 @@ router.get('/', async (req, res) => {
       }
     }
 
-    if (status) andConditions.push({ status });
+    if (status) {
+      const allMcoms = await McomRecord.findAll({
+        attributes: ['id', 'status', 'active_non_active', 'renewal_date_vise', 'renewal_payment_status', 'renewal_period'],
+        raw: true
+      });
+      const target = status.toLowerCase().trim();
+      const matchedIds = allMcoms
+        .filter(r => getMcomEffectiveStatus(r).toLowerCase() === target)
+        .map(r => r.id);
+      andConditions.push({ id: { $in: matchedIds } });
+    }
     if (month) {
       if (month.includes('-')) {
         andConditions.push({ reg_date: { $like: `${month}-%` } });
@@ -177,6 +368,44 @@ router.get('/', async (req, res) => {
       });
     }
 
+    if (town) {
+      const cleanTown = String(town).trim();
+      const isLavinia = /m(oun)?t\.?\s*lavinia/i.test(cleanTown);
+      const isJaEla = /ja\s*-?\s*ela/i.test(cleanTown);
+      const isNuwara = /nuwara\s*-?\s*eliya/i.test(cleanTown);
+
+      if (isLavinia) {
+        andConditions.push({
+          $or: [
+            { town: { $like: '%Mt. Lavinia%' } },
+            { town: { $like: '%Mount Lavinia%' } },
+            { address: { $like: '%Lavinia%' } },
+          ]
+        });
+      } else if (isJaEla) {
+        andConditions.push({
+          $or: [
+            { town: { $like: '%Ja%Ela%' } },
+            { address: { $like: '%Ja%Ela%' } },
+          ]
+        });
+      } else if (isNuwara) {
+        andConditions.push({
+          $or: [
+            { town: { $like: '%Nuwara%Eliya%' } },
+            { address: { $like: '%Nuwara%Eliya%' } },
+          ]
+        });
+      } else {
+        andConditions.push({
+          $or: [
+            { town: { $like: `%${cleanTown}%` } },
+            { address: { $like: `%${cleanTown}%` } },
+          ]
+        });
+      }
+    }
+
     if (andConditions.length > 0) {
       where.$and = andConditions;
     }
@@ -189,7 +418,9 @@ router.get('/', async (req, res) => {
       raw: true,
     });
 
-    res.json({ rows: records, total, page: Number(page), limit: Number(limit) });
+    // Sanitize date fields before sending to frontend
+    const cleanedRecords = records.map(r => sanitizeDates({ ...r }));
+    res.json({ rows: cleanedRecords, total, page: Number(page), limit: Number(limit) });
   } catch (err) {
     console.error('GET /mcom error:', err);
     res.status(500).json({ error: err.message });
@@ -200,14 +431,18 @@ router.get('/', async (req, res) => {
 // NOTE: Must be defined before '/:id' so Express doesn't treat "stats" as an id.
 router.get('/stats/summary', async (req, res) => {
   try {
-    const [total, active, non_active, pending] = await Promise.all([
-      McomRecord.count(),
-      McomRecord.count({ where: { status: 'Active' } }),
-      McomRecord.count({ where: { status: 'Non Active' } }),
-      McomRecord.count({ where: { status: 'Pending' } }),
-    ]);
-
-    res.json({ total, active, non_active, pending });
+    const allMcoms = await McomRecord.findAll({
+      attributes: ['id', 'status', 'active_non_active', 'renewal_date_vise', 'renewal_payment_status', 'renewal_period'],
+      raw: true
+    });
+    let active = 0, non_active = 0, pending = 0;
+    for (const r of allMcoms) {
+      const s = getMcomEffectiveStatus(r);
+      if (s === 'Active') active++;
+      else if (s === 'Non Active') non_active++;
+      else if (s === 'Pending') pending++;
+    }
+    res.json({ total: allMcoms.length, active, non_active, pending });
   } catch (err) {
     console.error('GET /mcom/stats/summary error:', err);
     res.status(500).json({ error: err.message });
@@ -219,7 +454,7 @@ router.get('/:id', async (req, res) => {
   try {
     const record = await McomRecord.findByPk(req.params.id);
     if (!record) return res.status(404).json({ error: 'Not found' });
-    res.json(record.toJSON());
+    res.json(sanitizeDates({ ...record.toJSON() }));
   } catch (err) {
     console.error('GET /mcom/:id error:', err);
     res.status(500).json({ error: err.message });
@@ -231,6 +466,7 @@ router.post('/', async (req, res) => {
   try {
     let data = pickWritable(req.body);
     coerceInts(data, 'units', 'year');
+    deriveMcomFields(data);
 
     // Resolve file_no from multiple possible sources
     data.file_no = resolveFileNo(req.body, data);
@@ -283,6 +519,7 @@ router.patch('/:id', async (req, res) => {
   try {
     let data = pickWritable(req.body);
     coerceInts(data, 'units', 'year');
+    deriveMcomFields(data);
 
     if (!Object.keys(data).length) {
       return res.status(400).json({ error: 'No fields to update' });
@@ -406,6 +643,7 @@ router.post('/bulk', async (req, res) => {
     for (const rawRec of records) {
       let data = pickWritable(rawRec);
       coerceInts(data, 'units', 'year');
+      deriveMcomFields(data);
 
       // Resolve file_no from multiple sources
       const file_no = rawRec.file_no || data.new_file_no || data.old_file_no;

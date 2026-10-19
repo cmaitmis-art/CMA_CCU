@@ -280,12 +280,12 @@ function Topbar({ currentUser, currentPage, onToggleSidebar, onLogout, onNavigat
       <div className="topbar-right">
         {currentUser?.role?.toLowerCase() === 'admin' && (
           <button
-            className="topbar-btn"
+            className="topbar-btn web-portal-btn"
             style={{ marginRight: '8px', fontSize: '12px', padding: '0 12px', fontWeight: 'bold', width: 'auto', borderRadius: '8px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)' }}
             onClick={() => window.open('/renewal', '_blank')}
             title="Open MC Renewal Portal"
           >
-            <i className="fas fa-globe" style={{ marginRight: '6px' }}></i> Web
+            <i className="fas fa-globe web-globe-icon"></i><span className="web-btn-text">Web</span>
           </button>
         )}
 
@@ -595,12 +595,18 @@ function Topbar({ currentUser, currentPage, onToggleSidebar, onLogout, onNavigat
               <div
                 className="avatar"
                 onClick={(e) => {
+                  // On mobile, clicking avatar toggles the dropdown
+                  if (window.innerWidth <= 768) {
+                    e.stopPropagation();
+                    setShowProfile((prev) => !prev);
+                    return;
+                  }
                   if (currentUser?.avatar_url && !avatarError) {
                     e.stopPropagation();
                     setShowAvatarViewer(true);
                   }
                 }}
-                style={currentUser?.avatar_url && !avatarError ? { cursor: 'zoom-in' } : {}}
+                style={currentUser?.avatar_url && !avatarError ? { cursor: 'zoom-in' } : { cursor: 'pointer' }}
               >
                 {currentUser?.avatar_url && !avatarError ? (
                   <img
@@ -613,12 +619,12 @@ function Topbar({ currentUser, currentPage, onToggleSidebar, onLogout, onNavigat
                   currentUser?.avatar || 'AD'
                 )}
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.3 }}>
+              <div className="profile-name-block">
                 <span className="pname" title={currentUser?.name || 'Admin'} style={{ fontSize: '13px', fontWeight: 600 }}>{currentUser?.name || 'Admin'}</span>
                 <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.45)', marginTop: '1px' }}>{getRoleLabel(currentUser?.role)}</span>
               </div>
             </div>
-            <i className="fas fa-chevron-down" style={{ fontSize: '10px', cursor: 'pointer', padding: '4px 4px 4px 8px' }} onClick={(e) => { e.stopPropagation(); setShowProfile((prev) => !prev); }}></i>
+            <i className="fas fa-chevron-down profile-chevron" style={{ fontSize: '10px', cursor: 'pointer', padding: '4px 4px 4px 8px' }} onClick={(e) => { e.stopPropagation(); setShowProfile((prev) => !prev); }}></i>
           </div>
           {showProfile && (
             <div className="profile-dd">

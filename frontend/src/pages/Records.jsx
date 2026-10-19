@@ -155,14 +155,15 @@ const TAB_CONFIG = {
     endpoint: 'mc',
     responseKey: 'rows',
     columns: [
+      { key: 'file_no', label: 'Reg No' },
       { key: 'reg_date', label: 'Reg Date', type: 'date' },
       { key: 'old_file_no', label: 'Old File No' },
       { key: 'new_file_no', label: 'New File No' },
       { key: 'name', label: 'Name' },
       { key: 'plan_no', label: 'Plan No' },
       { key: 'units', label: 'Units' },
-      { key: 'residential_units', label: 'Residential' },
-      { key: 'non_residential_units', label: 'Non Residential' },
+      { key: 'residential', label: 'Residential' },
+      { key: 'non_residential', label: 'Non Residential' },
       { key: 'service_units', label: 'Service Units' },
       { key: 'category', label: 'Category' },
       { key: 'secretary', label: 'Secretary' },
@@ -267,7 +268,12 @@ function formatDisplayDate(v) {
   const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
   const d = new Date(s);
-  if (!Number.isNaN(d.getTime())) return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+  if (!Number.isNaN(d.getTime())) {
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  }
   return s;
 }
 
@@ -310,23 +316,23 @@ function RecordViewModal({ isOpen, onClose, record, config }) {
             Primary Details
           </div>
           {config.columns.map((col) => (
-            <ViewRow 
-              key={col.key} 
-              label={col.label} 
-              value={col.type === 'date' ? formatDisplayDate(record[col.key]) : record[col.key]} 
+            <ViewRow
+              key={col.key}
+              label={col.label}
+              value={col.type === 'date' ? formatDisplayDate(record[col.key]) : record[col.key]}
             />
           ))}
-          
+
           {extraKeys.length > 0 && (
             <>
               <div style={{ fontSize: 12, fontWeight: 700, color: theme.navy, textTransform: 'uppercase', letterSpacing: '1px', borderBottom: `1px solid ${theme.border}`, paddingBottom: 6, marginBottom: 12, marginTop: 24 }}>
                 Other Saved Fields
               </div>
               {extraKeys.map((k) => (
-                <ViewRow 
-                  key={k} 
-                  label={prettifyKey(k)} 
-                  value={record[k]} 
+                <ViewRow
+                  key={k}
+                  label={prettifyKey(k)}
+                  value={record[k]}
                 />
               ))}
             </>
@@ -335,13 +341,13 @@ function RecordViewModal({ isOpen, onClose, record, config }) {
           <div style={{ fontSize: 12, fontWeight: 700, color: theme.navy, textTransform: 'uppercase', letterSpacing: '1px', borderBottom: `1px solid ${theme.border}`, paddingBottom: 6, marginBottom: 12, marginTop: 24 }}>
             Audit
           </div>
-          <ViewRow 
-            label="Created At" 
-            value={record.created_at ? `${formatDisplayDate(record.created_at)} (By: ${record.created_by || 'System'})` : '—'} 
+          <ViewRow
+            label="Created At"
+            value={record.created_at ? `${formatDisplayDate(record.created_at)} (By: ${record.created_by || 'System'})` : '—'}
           />
-          <ViewRow 
-            label="Updated At" 
-            value={record.updated_at ? `${formatDisplayDate(record.updated_at)} (By: ${record.updated_by || record.modified_by || 'System'})` : '—'} 
+          <ViewRow
+            label="Updated At"
+            value={record.updated_at ? `${formatDisplayDate(record.updated_at)} (By: ${record.updated_by || record.modified_by || 'System'})` : '—'}
           />
         </div>
         <div style={{ padding: '14px 22px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', background: '#fff', position: 'sticky', bottom: 0, zIndex: 1 }}>
@@ -384,7 +390,7 @@ export default function RecordsPage() {
     try {
       sessionStorage.setItem('cma_records_activeTab', activeTab);
       sessionStorage.setItem('cma_records_searchTerm', searchTerm);
-    } catch (e) {}
+    } catch (e) { }
   }, [activeTab, searchTerm]);
 
   const API_BASE = (import.meta.env.VITE_API_URL || '/api').trim();
@@ -521,7 +527,7 @@ export default function RecordsPage() {
             View every record saved across all databases in one place
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button style={btnOutline} onClick={loadAll} disabled={anyLoading}>
             <i className={`fas ${anyLoading ? 'fa-spinner fa-spin' : 'fa-sync-alt'}`} /> Refresh
           </button>
@@ -532,7 +538,7 @@ export default function RecordsPage() {
       </div>
 
       {/* Summary cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 18, overflowX: 'auto', padding: '3px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 12, marginBottom: 18, padding: '3px' }}>
         <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: '14px 16px' }}>
           <div style={{ fontSize: 11, color: theme.text3, fontWeight: 700, textTransform: 'uppercase' }}>Total Records</div>
           <div style={{ fontSize: 24, fontWeight: 700, color: theme.text, marginTop: 4 }}>{grandTotal}</div>
@@ -620,102 +626,102 @@ export default function RecordsPage() {
 
         {/* Pagination & Zoom Controls */}
         <div className={`cma-table-card-container ${isZoomed ? 'table-fullscreen-mode' : ''}`} style={{ background: isZoomed ? '#fff' : 'transparent', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '8px 16px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
-          {!viewAll && (
-            <>
-              <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}
-                style={page === 1 ? { ...btnOutline, opacity: 0.5, cursor: 'not-allowed', padding: '5px 10px', fontSize: 12 } : { ...btnOutline, padding: '5px 10px', fontSize: 12 }}>Prev</button>
-              <span style={{ fontSize: 12, color: theme.text3 }}>Page <strong style={{ color: theme.text }}>{page}</strong> / {maxPage}</span>
-              <button onClick={() => setPage((p) => Math.min(maxPage, p + 1))} disabled={page >= maxPage}
-                style={page >= maxPage ? { ...btnOutline, opacity: 0.5, cursor: 'not-allowed', padding: '5px 10px', fontSize: 12 } : { ...btnOutline, padding: '5px 10px', fontSize: 12 }}>Next</button>
-            </>
-          )}
-          <button
-            onClick={() => setViewAll(v => !v)}
-            style={{ 
-              background: viewAll ? '#10b981' : '#f1f5f9', 
-              color: viewAll ? '#ffffff' : '#334155', 
-              border: viewAll ? 'none' : '1px solid #cbd5e1', 
-              padding: '5px 12px', fontSize: 12, borderRadius: 6, marginLeft: 8, cursor: 'pointer' 
-            }}
-          >
-            <i className={loading && viewAll ? 'fas fa-spinner fa-spin' : viewAll ? 'fas fa-check-circle' : 'fas fa-list'} style={{ marginRight: 5 }} />
-            {loading && viewAll ? 'Loading All…' : viewAll ? 'Showing All Records' : 'View All Records'}
-          </button>
-          <button
-            onClick={() => {
-              const next = !isZoomed;
-              setIsZoomed(next);
-              setViewAll(next);
-            }}
-            style={{ 
-              background: '#e0e7ff', color: '#4338ca', border: '1px solid #c7d2fe', 
-              padding: '5px 12px', fontSize: 12, borderRadius: 6, marginLeft: 8, cursor: 'pointer' 
-            }}
-          >
-            {isZoomed ? (
-              <><i className="fas fa-compress" style={{ marginRight: 6 }} /> Exit Zoom</>
-            ) : (
-              <><i className="fas fa-expand" style={{ marginRight: 6 }} /> Zoom Table</>
+          <div style={{ padding: '8px 16px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
+            {!viewAll && (
+              <>
+                <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}
+                  style={page === 1 ? { ...btnOutline, opacity: 0.5, cursor: 'not-allowed', padding: '5px 10px', fontSize: 12 } : { ...btnOutline, padding: '5px 10px', fontSize: 12 }}>Prev</button>
+                <span style={{ fontSize: 12, color: theme.text3 }}>Page <strong style={{ color: theme.text }}>{page}</strong> / {maxPage}</span>
+                <button onClick={() => setPage((p) => Math.min(maxPage, p + 1))} disabled={page >= maxPage}
+                  style={page >= maxPage ? { ...btnOutline, opacity: 0.5, cursor: 'not-allowed', padding: '5px 10px', fontSize: 12 } : { ...btnOutline, padding: '5px 10px', fontSize: 12 }}>Next</button>
+              </>
             )}
-          </button>
-        </div>
-
-        {/* Table */}
-        <div style={tableWrapperStyle}>
-          <table style={tableStyle}>
-            <thead>
-              <tr>
-                {config.columns.map((col) => (
-                  <th key={col.key} style={thStyle}>{col.label}</th>
-                ))}
-                <th style={{ ...thStyle, position: 'sticky', right: 0, background: '#f8fafc', zIndex: 30, borderLeft: '2px solid #94a3b8', boxShadow: '-4px 0 8px rgba(0,0,0,0.06)', backgroundClip: 'padding-box' }}>View</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                Array.from({ length: 8 }).map((_, i) => (
-                  <tr key={i} style={{ borderBottom: `1px solid ${theme.border}` }}>
-                    {config.columns.map((col) => (
-                      <td key={col.key} style={cellStyle}>
-                        <div style={{ height: 12, borderRadius: 6, background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.5s infinite', width: `${50 + Math.random() * 40}%` }} />
-                      </td>
-                    ))}
-                    <td style={{ ...cellStyle, position: 'sticky', right: 0, background: '#fff', zIndex: 10, borderLeft: '2px solid #94a3b8' }} />
-                  </tr>
-                ))
-              ) : error ? (
-                <tr><td colSpan={config.columns.length + 1} style={{ padding: 24, textAlign: 'center', color: theme.red }}>{error}</td></tr>
-              ) : pagedRows.length === 0 ? (
-                <tr><td colSpan={config.columns.length + 1} style={{ padding: 24, textAlign: 'center', color: theme.text3 }}>No records found</td></tr>
+            <button
+              onClick={() => setViewAll(v => !v)}
+              style={{
+                background: viewAll ? '#10b981' : '#f1f5f9',
+                color: viewAll ? '#ffffff' : '#334155',
+                border: viewAll ? 'none' : '1px solid #cbd5e1',
+                padding: '5px 12px', fontSize: 12, borderRadius: 6, marginLeft: 8, cursor: 'pointer'
+              }}
+            >
+              <i className={loading && viewAll ? 'fas fa-spinner fa-spin' : viewAll ? 'fas fa-check-circle' : 'fas fa-list'} style={{ marginRight: 5 }} />
+              {loading && viewAll ? 'Loading All…' : viewAll ? 'Showing All Records' : 'View All Records'}
+            </button>
+            <button
+              onClick={() => {
+                const next = !isZoomed;
+                setIsZoomed(next);
+                setViewAll(next);
+              }}
+              style={{
+                background: '#e0e7ff', color: '#4338ca', border: '1px solid #c7d2fe',
+                padding: '5px 12px', fontSize: 12, borderRadius: 6, marginLeft: 8, cursor: 'pointer'
+              }}
+            >
+              {isZoomed ? (
+                <><i className="fas fa-compress" style={{ marginRight: 6 }} /> Exit Zoom</>
               ) : (
-                pagedRows.map((row, idx) => (
-                  <tr
-                    key={row.id ?? idx}
-                    style={{ borderBottom: `1px solid ${theme.border}` }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = '')}
-                  >
-                    {config.columns.map((col) => (
-                      <td key={col.key} style={cellStyle} title={col.type === 'date' ? formatDisplayDate(row[col.key]) : row[col.key]}>
-                        {col.type === 'date' ? formatDisplayDate(row[col.key]) : (row[col.key] || '—')}
-                      </td>
-                    ))}
-                    <td style={{ ...cellStyle, position: 'sticky', right: 0, background: '#fff', zIndex: 10, borderLeft: '2px solid #94a3b8', boxShadow: '-4px 0 8px rgba(0,0,0,0.06)', backgroundClip: 'padding-box' }}>
-                      <button
-                        onClick={() => { setSelectedRecord(row); setShowViewModal(true); }}
-                        style={{ background: 'none', border: 'none', color: theme.blue, cursor: 'pointer', fontSize: 13 }}
-                        title="View full record"
-                      >
-                        <i className="fas fa-eye" />
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                <><i className="fas fa-expand" style={{ marginRight: 6 }} /> Zoom Table</>
               )}
-            </tbody>
-          </table>
-        </div>
+            </button>
+          </div>
+
+          {/* Table */}
+          <div style={tableWrapperStyle}>
+            <table style={tableStyle}>
+              <thead>
+                <tr>
+                  {config.columns.map((col) => (
+                    <th key={col.key} style={thStyle}>{col.label}</th>
+                  ))}
+                  <th style={{ ...thStyle, position: 'sticky', right: 0, background: '#f8fafc', zIndex: 30, borderLeft: '2px solid #94a3b8', boxShadow: '-4px 0 8px rgba(0,0,0,0.06)', backgroundClip: 'padding-box' }}>View</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  Array.from({ length: 8 }).map((_, i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                      {config.columns.map((col) => (
+                        <td key={col.key} style={cellStyle}>
+                          <div style={{ height: 12, borderRadius: 6, background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.5s infinite', width: `${50 + Math.random() * 40}%` }} />
+                        </td>
+                      ))}
+                      <td style={{ ...cellStyle, position: 'sticky', right: 0, background: '#fff', zIndex: 10, borderLeft: '2px solid #94a3b8' }} />
+                    </tr>
+                  ))
+                ) : error ? (
+                  <tr><td colSpan={config.columns.length + 1} style={{ padding: 24, textAlign: 'center', color: theme.red }}>{error}</td></tr>
+                ) : pagedRows.length === 0 ? (
+                  <tr><td colSpan={config.columns.length + 1} style={{ padding: 24, textAlign: 'center', color: theme.text3 }}>No records found</td></tr>
+                ) : (
+                  pagedRows.map((row, idx) => (
+                    <tr
+                      key={row.id ?? idx}
+                      style={{ borderBottom: `1px solid ${theme.border}` }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = '')}
+                    >
+                      {config.columns.map((col) => (
+                        <td key={col.key} style={cellStyle} title={col.type === 'date' ? formatDisplayDate(row[col.key]) : row[col.key]}>
+                          {col.type === 'date' ? formatDisplayDate(row[col.key]) : (row[col.key] || '—')}
+                        </td>
+                      ))}
+                      <td style={{ ...cellStyle, position: 'sticky', right: 0, background: '#fff', zIndex: 10, borderLeft: '2px solid #94a3b8', boxShadow: '-4px 0 8px rgba(0,0,0,0.06)', backgroundClip: 'padding-box' }}>
+                        <button
+                          onClick={() => { setSelectedRecord(row); setShowViewModal(true); }}
+                          style={{ background: 'none', border: 'none', color: theme.blue, cursor: 'pointer', fontSize: 13 }}
+                          title="View full record"
+                        >
+                          <i className="fas fa-eye" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
