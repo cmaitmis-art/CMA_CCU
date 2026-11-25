@@ -594,23 +594,61 @@ router.delete('/:id/document', async (req, res) => {
 // ── PUT /api/cfiles/:id/transfer ─ Transfer C-file to a department ─────────
 router.put('/:id/transfer', async (req, res) => {
   try {
-    const { assigned_department, user_name, from_department } = req.body;
+    const { assigned_department, user_name, from_department, transfer_remark, remark } = req.body || {};
+    const targetDept = typeof assigned_department === 'string' ? assigned_department.trim() : '';
+    if (!targetDept) {
+      return res.status(400).json({ error: 'Assigned department is required' });
+    }
+
     const cfile = await Cfile.findByPk(req.params.id);
     if (!cfile) return res.status(404).json({ error: 'C file not found' });
 
-    const isReturnToCCU = assigned_department === 'CCU';
+    const isReturnToCCU = targetDept === 'CCU';
     const newStatus = isReturnToCCU ? 'Pending' : 'Transferred';
-    const newDept = isReturnToCCU ? null : assigned_department;
+    const newDept = isReturnToCCU ? null : targetDept;
+
+    const rawRemark = transfer_remark !== undefined ? transfer_remark : remark;
+    const trimmedRemark = typeof rawRemark === 'string' ? rawRemark.trim() : '';
+
+    let transferDocPath = null;
+    let transferDocName = null;
+    if (req.files && req.files.document) {
+      const file = Array.isArray(req.files.document) ? req.files.document[0] : req.files.document;
+      if (file && file.data) {
+        const originalName = path.basename(file.name || 'document');
+        const ext = path.extname(originalName).toLowerCase();
+        const finalName = `CFILE_TRANSFER_${cfile.id}_${Date.now()}${ext}`;
+        const uploadsDir = path.join(__dirname, '../uploads/cfiles');
+        await fs.promises.mkdir(uploadsDir, { recursive: true });
+        const absolutePath = path.join(uploadsDir, finalName);
+        await fs.promises.writeFile(absolutePath, file.data);
+        transferDocPath = `uploads/cfiles/${finalName}`;
+        transferDocName = originalName;
+      }
+    }
 
     let history = [];
-    try { history = cfile.history ? JSON.parse(cfile.history) : []; } catch (e) {}
-    history.push({
+    try {
+      const parsed = cfile.history ? JSON.parse(cfile.history) : [];
+      if (Array.isArray(parsed)) history = parsed;
+    } catch (e) {}
+
+    const historyEntry = {
       name: user_name || 'System',
       action: isReturnToCCU ? 'Returned to CCU' : 'Transferred',
       from_department: from_department || 'ADMIN',
+      to_department: targetDept,
       time: new Date().toISOString(),
-      note: isReturnToCCU ? 'Returned to CCU (Admin)' : `Transferred to ${assigned_department}`
-    });
+      note: isReturnToCCU ? 'Returned to CCU (Admin)' : `Transferred to ${targetDept}`,
+    };
+    if (trimmedRemark) {
+      historyEntry.remark = trimmedRemark;
+    }
+    if (transferDocPath) {
+      historyEntry.document_path = transferDocPath;
+      historyEntry.document_name = transferDocName;
+    }
+    history.push(historyEntry);
 
     await cfile.update({
       status: newStatus,

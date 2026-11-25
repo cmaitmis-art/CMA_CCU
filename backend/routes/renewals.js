@@ -165,9 +165,6 @@ router.post('/:refNo/approve', async (req, res) => {
             await renewal.save();
           }
 
-          const isActive = maxYear >= currentYear;
-          const targetStatus = isActive ? 'Active' : 'Non Active';
-
           let combinedYears = years.join(', ');
           if (mcom.renewal_paid_years) {
             const existing = mcom.renewal_paid_years.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y));
@@ -175,21 +172,26 @@ router.post('/:refNo/approve', async (req, res) => {
             const merged = Array.from(new Set([...existing, ...current])).sort((a, b) => a - b);
             combinedYears = merged.join(', ');
           }
+          const allPaidMcom = combinedYears ? combinedYears.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y)) : [];
+          const effectiveLatestMcom = allPaidMcom.length > 0 ? Math.max(...allPaidMcom) : maxYear;
+
+          const isActive = effectiveLatestMcom >= currentYear;
+          const targetStatus = isActive ? 'Active' : 'Non Active';
 
           mcom.renewal_paid = true;
-          mcom.renewal_paid_year = maxYear; // Integer
+          mcom.renewal_paid_year = effectiveLatestMcom; // Integer
           mcom.renewal_paid_years = combinedYears;
           mcom.renewal_paid_amount = renewal.amount;
           mcom.renewal_paid_date = todayStr;
           mcom.renewal_receipt_no = renewal.ref_no;
-          mcom.renewal_period = maxYear.toString();
-          mcom.next_renewal_date = `${maxYear}-12-31`;
+          mcom.renewal_period = effectiveLatestMcom.toString();
+          mcom.next_renewal_date = `${effectiveLatestMcom}-12-31`;
           mcom.renewal_status = targetStatus;
           mcom.renewal_date_vise = targetStatus;
           mcom.active_non_active = targetStatus;
           mcom.status = targetStatus;
           mcom.renewal_payment_status = 'Approved';
-          mcom.acknowledgement_no = `ACK/MCOM/${mcom.new_file_no || mcom.file_no || mcom.id}/${maxYear}`;
+          mcom.acknowledgement_no = `ACK/MCOM/${mcom.new_file_no || mcom.file_no || mcom.id}/${effectiveLatestMcom}`;
           mcom.acknowledgement_date = todayStr;
           await mcom.save();
 
@@ -218,9 +220,6 @@ router.post('/:refNo/approve', async (req, res) => {
             await renewal.save();
           }
 
-          const isActive = maxYear >= currentYear;
-          const targetStatus = isActive ? 'Active' : 'Non Active';
-
           let combinedYears = years.join(', ');
           if (mc.renewal_paid_years) {
             const existing = mc.renewal_paid_years.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y));
@@ -228,19 +227,24 @@ router.post('/:refNo/approve', async (req, res) => {
             const merged = Array.from(new Set([...existing, ...current])).sort((a, b) => a - b);
             combinedYears = merged.join(', ');
           }
+          const allPaidMc = combinedYears ? combinedYears.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y)) : [];
+          const effectiveLatestMc = allPaidMc.length > 0 ? Math.max(...allPaidMc) : maxYear;
+
+          const isActive = effectiveLatestMc >= currentYear;
+          const targetStatus = isActive ? 'Active' : 'Non Active';
 
           mc.renewal_paid = true;
-          mc.renewal_paid_year = maxYear; // Integer
+          mc.renewal_paid_year = effectiveLatestMc; // Integer
           mc.renewal_paid_years = combinedYears;
           mc.renewal_paid_amount = renewal.amount;
           mc.renewal_paid_date = todayStr;
           mc.renewal_receipt_no = renewal.ref_no;
-          mc.renewal_period = maxYear.toString();
-          mc.next_renewal_date = `${maxYear}-12-31`;
+          mc.renewal_period = effectiveLatestMc.toString();
+          mc.next_renewal_date = `${effectiveLatestMc}-12-31`;
           mc.renewal_payment_status = 'Approved';
           mc.renewal_date_vise = targetStatus;
           mc.status = targetStatus;
-          mc.acknowledgement_no = `ACK/${mc.new_file_no || mc.old_file_no || mc.file_no || mc.id}/${maxYear}`;
+          mc.acknowledgement_no = `ACK/${mc.new_file_no || mc.old_file_no || mc.file_no || mc.id}/${effectiveLatestMc}`;
           mc.acknowledgement_date = todayStr;
           await mc.save();
 
@@ -304,20 +308,57 @@ router.post('/:refNo/reject', async (req, res) => {
     // Revert MC status back so they can try again
     try {
       if (renewal.mc_id) {
+        let rejectedYears = [];
+        try {
+          if (renewal.years) {
+            rejectedYears = Array.isArray(renewal.years) ? renewal.years : JSON.parse(renewal.years);
+          }
+        } catch (_) {}
+        const rejectedNums = (rejectedYears || []).map(y => parseInt(y, 10)).filter(y => !isNaN(y));
+
         if (renewal.mc_type === 'M.Com' && McomRecord) {
           const mcom = await McomRecord.findByPk(renewal.mc_id);
-          if (mcom && mcom.renewal_payment_status === 'Pending Approval') {
-            mcom.renewal_payment_status = null;
+          if (mcom) {
+            if (mcom.renewal_paid_years && rejectedNums.length > 0) {
+              const currentPaid = mcom.renewal_paid_years.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y));
+              const remaining = currentPaid.filter(y => !rejectedNums.includes(y));
+              mcom.renewal_paid_years = remaining.length > 0 ? remaining.join(', ') : null;
+              mcom.renewal_paid_year = remaining.length > 0 ? Math.max(...remaining) : null;
+              mcom.renewal_period = remaining.length > 0 ? String(Math.max(...remaining)) : (mcom.year || (mcom.reg_date ? new Date(mcom.reg_date).getFullYear().toString() : null));
+              if (remaining.length === 0) {
+                mcom.renewal_paid = false;
+                mcom.renewal_paid_amount = null;
+                mcom.renewal_paid_date = null;
+                mcom.renewal_receipt_no = null;
+              }
+            }
+            mcom.renewal_payment_status = 'Rejected';
             mcom.status = 'Non Active';
+            mcom.renewal_date_vise = 'Non Active';
+            mcom.active_non_active = 'Non Active';
+            if (req.body.reason) mcom.remark = `Payment rejected: ${req.body.reason}`;
             await mcom.save();
           }
         } else if (ManagementCorporation) {
           const mc = await ManagementCorporation.findByPk(renewal.mc_id);
-          if (mc && mc.renewal_payment_status === 'Pending Approval') {
-            mc.renewal_payment_status = null;
+          if (mc) {
+            if (mc.renewal_paid_years && rejectedNums.length > 0) {
+              const currentPaid = mc.renewal_paid_years.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y));
+              const remaining = currentPaid.filter(y => !rejectedNums.includes(y));
+              mc.renewal_paid_years = remaining.length > 0 ? remaining.join(', ') : null;
+              mc.renewal_paid_year = remaining.length > 0 ? Math.max(...remaining) : null;
+              mc.renewal_period = remaining.length > 0 ? String(Math.max(...remaining)) : (mc.year || (mc.reg_date ? new Date(mc.reg_date).getFullYear().toString() : null));
+              if (remaining.length === 0) {
+                mc.renewal_paid = false;
+                mc.renewal_paid_amount = null;
+                mc.renewal_paid_date = null;
+                mc.renewal_receipt_no = null;
+              }
+            }
+            mc.renewal_payment_status = 'Rejected';
+            mc.approval_note = req.body.reason || '';
             mc.status = 'Non Active';
-            // Note: technically we could also remove the rejected year from renewal_paid_years,
-            // but for safety we just clear the pending state so it opens up the UI again.
+            mc.renewal_date_vise = 'Non Active';
             await mc.save();
           }
         }

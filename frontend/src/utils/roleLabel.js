@@ -7,6 +7,9 @@
  */
 export function hasPermission(currentUser, module, action = 'view') {
   if (!currentUser) return false;
+  // Super Admin has unconditional, unrestricted access to every single action in every module
+  if (currentUser?.isSuperAdmin) return true;
+
   // NOTE: Admin does NOT get automatic full access — they must be granted permissions
   // explicitly via the Edit Role screen, just like any other role.
 
@@ -35,6 +38,7 @@ export function hasPermission(currentUser, module, action = 'view') {
  * meaning they cannot create, edit, delete, or approve.
  */
 export function isViewOnly(currentUser, module) {
+  if (currentUser?.isSuperAdmin) return false;
   if (String(currentUser?.role || '').trim().toLowerCase() === 'admin') return false;
 
   const permissions = currentUser?.permissions || {};
@@ -70,6 +74,8 @@ export function getRoleLabel(role) {
       return 'Legal Department';
     case 'Technical':
       return 'Technical Department';
+    case 'Finance':
+      return 'Finance Department';
     default:
       return r || 'Unknown';
   }
@@ -81,5 +87,6 @@ export function getRoleTagKind(role) {
   if (r === 'Chairman' || r === 'DGM') return 'purple';
   if (r === 'Legal') return 'green';
   if (r === 'Technical') return 'orange';
+  if (r === 'Finance') return 'pink';
   return 'blue';
 }

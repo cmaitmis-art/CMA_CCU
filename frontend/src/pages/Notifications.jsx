@@ -39,7 +39,7 @@ export default function Notifications({ currentUser, onNavigate }) {
   const [showAll, setShowAll] = useState(false);
 
   const dept = String(currentUser?.department || '').trim().toLowerCase();
-  const effectiveRole = dept === 'legal' ? 'LEGAL' : dept === 'technical' ? 'TECHNICAL' : currentUser?.role;
+  const effectiveRole = currentUser?.isSuperAdmin ? 'Admin' : (dept === 'legal' ? 'LEGAL' : dept === 'technical' ? 'TECHNICAL' : currentUser?.role);
 
   const loadDbNotifications = async (all) => {
     if (!currentUser?.id) return;

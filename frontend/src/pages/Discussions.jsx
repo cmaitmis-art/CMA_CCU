@@ -1305,7 +1305,8 @@ export default function DiscussionManagement({ currentUser }) {
                   filteredDiscussions.map((discussion) => (
                     <tr
                       key={discussion.id}
-                      style={{ borderBottom: `1px solid ${theme.border}`, height: 44 }}
+                      onClick={() => { setViewRecord(discussion); setShowViewModal(true); }}
+                      style={{ borderBottom: `1px solid ${theme.border}`, height: 44, cursor: 'pointer' }}
                       onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
                       onMouseLeave={(e) => e.currentTarget.style.background = ''}
                     >
@@ -1366,11 +1367,11 @@ export default function DiscussionManagement({ currentUser }) {
                       </td>
                       <td className="mc-td-actions" style={{ padding: '8px 8px', fontSize: 12, fontFamily: "var(--font-sans)", whiteSpace: 'nowrap', overflow: 'visible', position: 'sticky', right: 0, width: ACTIONS_COL_WIDTH, minWidth: ACTIONS_COL_WIDTH, maxWidth: ACTIONS_COL_WIDTH, zIndex: 10, background: '#ffffff', borderLeft: '1px solid #e2e8f0', boxShadow: 'none', backgroundClip: 'padding-box' }}>
                         <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-start', alignItems: 'center' }}>
-                          <ActionBtn icon="fas fa-eye" color={theme.blue} title="View" onClick={() => { setViewRecord(discussion); setShowViewModal(true); }} />
-                          {canEdit && <ActionBtn icon="fas fa-history" color={theme.text2} title="History" onClick={() => { setSelectedHistoryRecord(discussion); setShowHistoryModal(true); }} />}
-                          {canEdit && <ActionBtn icon="fas fa-edit" color="#f59e0b" title="Edit" onClick={() => handleOpenModal(discussion)} />}
-                          {canEdit && <ActionBtn icon="fas fa-print" color="#8b5cf6" title="Print Notice" onClick={() => printRow(discussion)} />}
-                          {canEdit && <ActionBtn icon="fas fa-trash" color={theme.red} title="Delete" onClick={() => handleDelete(discussion.id)} />}
+                          <ActionBtn icon="fas fa-eye" color={theme.blue} title="View" onClick={(e) => { e.stopPropagation(); setViewRecord(discussion); setShowViewModal(true); }} />
+                          {canEdit && <ActionBtn icon="fas fa-history" color={theme.text2} title="History" onClick={(e) => { e.stopPropagation(); setSelectedHistoryRecord(discussion); setShowHistoryModal(true); }} />}
+                          {canEdit && <ActionBtn icon="fas fa-edit" color="#f59e0b" title="Edit" onClick={(e) => { e.stopPropagation(); handleOpenModal(discussion); }} />}
+                          {canEdit && <ActionBtn icon="fas fa-print" color="#8b5cf6" title="Print Notice" onClick={(e) => { e.stopPropagation(); printRow(discussion); }} />}
+                          {canEdit && <ActionBtn icon="fas fa-trash" color={theme.red} title="Delete" onClick={(e) => { e.stopPropagation(); handleDelete(discussion.id); }} />}
                         </div>
                       </td>
                     </tr>

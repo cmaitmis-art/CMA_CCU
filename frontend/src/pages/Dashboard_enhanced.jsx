@@ -553,6 +553,7 @@ function ActiveUsersPanel({ users }) {
 
 function Dashboard({ onNavigate, currentUser }) {
   const hasAccess = (modId) => {
+    if (currentUser?.isSuperAdmin) return true;
     if (currentUser?.role?.toLowerCase() === 'admin') return true;
     const managedModules = ['dashboard', 'registration', 'renewal_approval', 'mc', 'mcom', 'cfiles', 'complains', 'discussion', 'notifications', 'records', 'customer_history', 'reports', 'users', 'profile'];
     if (!managedModules.includes(modId)) return true;

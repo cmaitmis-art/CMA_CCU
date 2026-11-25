@@ -7,7 +7,7 @@ router.get('/:userId/:draftKey', async (req, res) => {
   try {
     const { userId, draftKey } = req.params;
     const draft = await db.models.UserDraft.findOne({ where: { userId, draftKey } });
-    if (!draft) return res.status(404).json({ error: 'Draft not found' });
+    if (!draft) return res.json({ draftData: null });
     
     res.json({ draftData: draft.draftData });
   } catch (err) {

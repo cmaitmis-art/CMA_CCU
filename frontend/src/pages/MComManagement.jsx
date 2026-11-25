@@ -16,6 +16,7 @@ import { MONTH_OPTIONS, getYearFilterOptions, ZONE_OPTIONS } from '../utils/filt
 import GenericExportModal from '../components/GenericExportModal.jsx';
 import { useSettings } from '../SettingsContext.jsx';
 import { hasPermission } from '../utils/roleLabel.js';
+import { findBestFileNoMatch } from '../utils/fileNoMatch.js';
 import { CMA_LOGO_BASE64 } from '../utils/logoBase64.js';
 import { LETTERHEAD_BASE64 } from '../utils/letterHeadBase64.js';
 import AgmManagementView from './AgmManagementView.jsx';
@@ -661,7 +662,7 @@ export default function MComManagement({ currentUser }) {
     ? `${currentUser.name} (${currentUser.username})`
     : currentUser?.name || currentUser?.username || '';
 
-  const isAGM = String(currentUser?.role || '').trim().toUpperCase() === 'AGM';
+  const isAGM = String(currentUser?.role || '').trim().toUpperCase() === 'AGM' || Boolean(currentUser?.isSuperAdmin);
   const canEdit = hasPermission(currentUser, 'mcom', 'edit');
   const canDelete = hasPermission(currentUser, 'mcom', 'delete');
   const canCreate = hasPermission(currentUser, 'mcom', 'create');
@@ -675,19 +676,20 @@ export default function MComManagement({ currentUser }) {
   const [isImporting, setIsImporting] = useState(false);
   const [showAgmPage, setShowAgmPage] = useState(false);
 
+  const pendingNavigateOpenRef = useRef(localStorage.getItem('cma_mcom_navigate_open') || null);
+  const isNavigatingFromSearchRef = useRef(Boolean(localStorage.getItem('cma_mcom_navigate_search') || pendingNavigateOpenRef.current));
+
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [mcToReject, setMcToReject] = useState(null);
 
   const [searchTerm, setSearchTerm] = useState(() => {
     const nav = localStorage.getItem('cma_mcom_navigate_search');
-    if (nav) {
-      localStorage.removeItem('cma_mcom_navigate_search');
-      return nav;
-    }
+    if (nav) return nav;
     return sessionStorage.getItem('cma_mcom_searchTerm') || '';
   });
   const [statusFilter, setStatusFilter] = useState(() => {
+    if (isNavigatingFromSearchRef.current) return '';
     const filter = localStorage.getItem('cma_mcom_filter');
     if (filter) {
       localStorage.removeItem('cma_mcom_filter');
@@ -696,17 +698,26 @@ export default function MComManagement({ currentUser }) {
     return sessionStorage.getItem('cma_mcom_statusFilter') || '';
   });
   const [yearFilter, setYearFilter] = useState(() => {
+    if (isNavigatingFromSearchRef.current) return '';
     return sessionStorage.getItem('cma_mcom_yearFilter') || '';
   });
   const [monthFilter, setMonthFilter] = useState(() => {
+    if (isNavigatingFromSearchRef.current) return '';
     return sessionStorage.getItem('cma_mcom_monthFilter') || '';
   });
   const [categoryFilter, setCategoryFilter] = useState(() => {
+    if (isNavigatingFromSearchRef.current) return '';
     return sessionStorage.getItem('cma_mcom_categoryFilter') || '';
   });
   const [zoneFilter, setZoneFilter] = useState(() => {
+    if (isNavigatingFromSearchRef.current) return '';
     return sessionStorage.getItem('cma_mcom_zoneFilter') || '';
   });
+
+  useEffect(() => {
+    localStorage.removeItem('cma_mcom_navigate_search');
+    localStorage.removeItem('cma_mcom_navigate_open');
+  }, []);
   const [isZoneOpen, setIsZoneOpen] = useState(false);
   const [zoneSearch, setZoneSearch] = useState('');
   const zoneDropdownRef = useRef(null);
@@ -891,12 +902,13 @@ export default function MComManagement({ currentUser }) {
     const a = (r.active_non_active || '').trim().toLowerCase();
     const v = (r.renewal_date_vise || '').trim().toLowerCase();
     const currentYear = new Date().getFullYear();
-    const yr = parseInt(r.renewal_period, 10);
+    const rpMatches = String(r.renewal_period || '').match(/\b(19|20)\d{2}\b/g);
+    const yr = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(r.renewal_period, 10);
 
     if (p === 'Pending Approval' || r.status === 'Pending') return 'Pending';
+    if (!isNaN(yr)) return yr >= currentYear ? 'Active' : 'Non Active';
     if (a === 'non active' || a === 'nonactive' || a === 'inactive' || v === 'non active' || v === 'nonactive' || v === 'inactive' || r.status === 'Non Active') return 'Non Active';
     if (a === 'active' || v === 'active' || r.status === 'Active' || p === 'Approved') return 'Active';
-    if (yr && yr < currentYear) return 'Non Active';
     return 'Active';
   }
 
@@ -943,6 +955,17 @@ export default function MComManagement({ currentUser }) {
       const rows = data?.rows ?? [];
       setMcs(rows);
       setTotalCount(data?.total ?? 0);
+
+      if (pendingNavigateOpenRef.current) {
+        const targetQuery = pendingNavigateOpenRef.current;
+        pendingNavigateOpenRef.current = null;
+        const matched = findBestFileNoMatch(rows, targetQuery);
+        if (matched) {
+          openView(matched);
+        } else {
+          showToast(`No matching M.Com record found for "${targetQuery}"`, 'error');
+        }
+      }
 
       try {
         const sumRes = await fetch(`${API_BASE}/mcom/stats/summary`);
@@ -1274,7 +1297,22 @@ export default function MComManagement({ currentUser }) {
   }
 
   function openRenewal(mc) {
-    setRenewalRecord(mc);
+    let effectiveMc = { ...mc };
+    if (mc.renewal_payment_status === 'Rejected' && !mc.renewal_paid) {
+      let lastApprovedYear = null;
+      if (mc.acknowledgement_no) {
+        const ackMatches = String(mc.acknowledgement_no).match(/\b(19|20)\d{2}\b/g);
+        if (ackMatches && ackMatches.length > 0) lastApprovedYear = parseInt(ackMatches[ackMatches.length - 1], 10);
+      }
+      const regYear = mc.reg_date ? new Date(mc.reg_date).getFullYear() : (mc.year ? parseInt(mc.year, 10) : null);
+      effectiveMc.renewal_period = lastApprovedYear ? String(lastApprovedYear) : (regYear ? String(regYear) : null);
+      if (effectiveMc.renewal_paid_years) {
+        const curPaid = effectiveMc.renewal_paid_years.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y));
+        const approvedOnly = lastApprovedYear ? curPaid.filter(y => y <= lastApprovedYear) : [];
+        effectiveMc.renewal_paid_years = approvedOnly.length > 0 ? approvedOnly.join(', ') : null;
+      }
+    }
+    setRenewalRecord(effectiveMc);
     setRenewalModalOpen(true);
   }
 
@@ -1293,7 +1331,15 @@ export default function MComManagement({ currentUser }) {
 
     setMarkingRenewalPaid(true);
     try {
-      const existingPaidYears = mc.renewal_paid_years ? mc.renewal_paid_years.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y)) : [];
+      let existingPaidYears = mc.renewal_paid_years ? mc.renewal_paid_years.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y)) : [];
+      if (mc.renewal_payment_status === 'Rejected') {
+        let lastApprovedYear = null;
+        if (mc.acknowledgement_no) {
+          const matches = String(mc.acknowledgement_no).match(/\b(19|20)\d{2}\b/g);
+          if (matches && matches.length > 0) lastApprovedYear = parseInt(matches[matches.length - 1], 10);
+        }
+        existingPaidYears = lastApprovedYear ? existingPaidYears.filter(y => y <= lastApprovedYear) : [];
+      }
       let newPaidYears = manualPaidYears ? manualPaidYears.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y)) : (multiRows.length > 0 ? multiRows.map(r => r.year) : [endYear]);
       const combinedYears = Array.from(new Set([...existingPaidYears, ...newPaidYears])).sort((a, b) => a - b);
       const latestYear = combinedYears.length > 0 ? combinedYears[combinedYears.length - 1] : endYear;
@@ -1308,6 +1354,7 @@ export default function MComManagement({ currentUser }) {
         renewal_paid_year: latestYear,
         renewal_paid_years: combinedYears.join(', '),
         renewal_payment_status: 'Pending Approval',
+        renewal_rejection_reason: null,
         renewal_period: latestYear.toString(),
         next_renewal_date: `${latestYear}-12-31`,  // Valid until Dec 31 of the latest paid year
         modified_by: auditUserLabel || 'system',
@@ -1443,14 +1490,46 @@ export default function MComManagement({ currentUser }) {
     if (!mc || !mc.id) return;
     setMarkingRenewalPaid(true);
     try {
+      let batchYears = [];
+      if (mc.acknowledgement_no) {
+        const matches = String(mc.acknowledgement_no).match(/\b(19|20)\d{2}\b/g);
+        const ackYear = matches ? parseInt(matches[matches.length - 1], 10) : null;
+        if (ackYear) {
+          const allPaid = (mc.renewal_paid_years || String(mc.renewal_paid_year || '')).split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y));
+          batchYears = allPaid.filter(y => y > ackYear);
+        }
+      }
+
+      const allCurrentPaid = (mc.renewal_paid_years || String(mc.renewal_paid_year || ''))
+        .split(',')
+        .map(y => parseInt(y.trim(), 10))
+        .filter(y => !isNaN(y));
+      const remaining = batchYears.length > 0
+        ? allCurrentPaid.filter(y => !batchYears.includes(y))
+        : [];
+
+      const regYear = mc.reg_date ? new Date(mc.reg_date).getFullYear() : (mc.year ? parseInt(mc.year, 10) : null);
+      const latestRemaining = remaining.length > 0 ? Math.max(...remaining) : null;
+      const newPeriod = latestRemaining ? String(latestRemaining) : (regYear ? String(regYear) : null);
+
       const payload = {
-        renewal_paid: false,
+        renewal_paid: remaining.length > 0,
         renewal_payment_status: 'Rejected',
         renewal_rejection_reason: reason,
+        remark: reason ? `Payment rejected: ${reason}` : mc.remark,
+        renewal_paid_years: remaining.length > 0 ? remaining.join(', ') : null,
+        renewal_paid_year: latestRemaining,
+        renewal_period: newPeriod,
+        next_renewal_date: latestRemaining ? `${latestRemaining}-12-31` : (regYear ? `${regYear}-12-31` : null),
         status: 'Non Active',
         renewal_date_vise: 'Non Active',
         active_non_active: 'Non Active'
       };
+      if (remaining.length === 0) {
+        payload.renewal_paid_amount = null;
+        payload.renewal_paid_date = null;
+        payload.renewal_receipt_no = null;
+      }
       const r = await fetch(`${API_BASE}/mcom/${mc.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -1465,17 +1544,161 @@ export default function MComManagement({ currentUser }) {
         body: JSON.stringify({
           type: 'error',
           title: 'M.Com Renewal Payment Rejected',
-          message: `Renewal payment for ${mc.management_corporation_name || mc.name || 'M.Com'} (File No: ${mc.new_file_no || mc.file_no || '-'}) was rejected by AGM. Reason: ${reason}. Please review and re-submit.`,
+          message: `Renewal payment for ${mc.management_corporation_name || mc.name || 'M.Com'} (File No: ${mc.new_file_no || mc.file_no || '-'}) was rejected by AGM. Reason: ${reason || 'No reason provided'}. Please review and re-submit.`,
           target_role: 'MA',
           link: `mcom-renewal:${mc.id}`,
         }),
       }).catch(() => { });
 
-      showToast('Renewal payment rejected.');
+      showToast('Renewal payment rejected. Years have been reopened.');
+      setRenewalRecord(prev => prev && prev.id === mc.id ? { ...prev, ...payload } : prev);
+      setSelectedRenewalYears([]);
       setRenewalModalOpen(false);
       await load();
     } catch (e) {
       showToast(e.message || 'Failed to reject payment', 'error');
+    } finally {
+      setMarkingRenewalPaid(false);
+    }
+  }
+
+  async function reversePaidYear(mc, yearToReverse) {
+    if (!mc || !mc.id || !yearToReverse) return;
+    const yNum = parseInt(yearToReverse, 10);
+    if (isNaN(yNum)) return;
+
+    const confirmed = await confirm({
+      title: `Reverse Payment for Year ${yNum}`,
+      message: `Are you sure you want to reverse year ${yNum}? This will mark year ${yNum} as unpaid so it can be re-selected and paid correctly.`,
+      confirmLabel: `Reverse Year ${yNum}`,
+      cancelLabel: 'Cancel',
+      confirmVariant: 'danger',
+    });
+    if (!confirmed) return;
+
+    setMarkingRenewalPaid(true);
+    try {
+      const currentPaid = (mc.renewal_paid_years || String(mc.renewal_paid_year || ''))
+        .split(',')
+        .map(y => parseInt(y.trim(), 10))
+        .filter(y => !isNaN(y));
+      const remaining = currentPaid.filter(y => y !== yNum);
+
+      const regYear = mc.reg_date ? new Date(mc.reg_date).getFullYear() : (mc.year ? parseInt(mc.year, 10) : null);
+      const latestRemaining = remaining.length > 0 ? Math.max(...remaining) : null;
+      const newPeriod = latestRemaining ? String(latestRemaining) : (regYear ? String(regYear) : null);
+
+      const currentYear = getServerDate().getFullYear();
+      const isActive = latestRemaining && latestRemaining >= currentYear;
+      const targetStatus = isActive ? 'Active' : 'Non Active';
+
+      const payload = {
+        renewal_paid: remaining.length > 0,
+        renewal_paid_years: remaining.length > 0 ? remaining.join(', ') : null,
+        renewal_paid_year: latestRemaining,
+        renewal_period: newPeriod,
+        next_renewal_date: latestRemaining ? `${latestRemaining}-12-31` : (regYear ? `${regYear}-12-31` : null),
+        status: targetStatus,
+        renewal_date_vise: targetStatus,
+        active_non_active: targetStatus,
+      };
+
+      if (remaining.length === 0) {
+        payload.renewal_paid_amount = null;
+        payload.renewal_paid_date = null;
+        payload.renewal_receipt_no = null;
+        payload.acknowledgement_no = null;
+        payload.acknowledgement_date = null;
+        payload.renewal_payment_status = null;
+      }
+
+      const r = await fetch(`${API_BASE}/mcom/${mc.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || 'Failed to reverse year');
+
+      setRenewalRecord(prev => prev && prev.id === mc.id ? { ...prev, ...payload } : prev);
+      setSelectedRenewalYears(prev => prev.filter(y => y !== yNum));
+      showToast(`Year ${yNum} reversed successfully.`);
+      await load();
+    } catch (err) {
+      showToast(err.message || 'Failed to reverse year', 'error');
+    } finally {
+      setMarkingRenewalPaid(false);
+    }
+  }
+
+  async function reopenRejectedPayment(mc) {
+    if (!mc || !mc.id) return;
+
+    const confirmed = await confirm({
+      title: 'Reopen Rejected Years',
+      message: 'This will revert the rejected payment and reopen the years so you can select and mark them as paid again. Continue?',
+      confirmLabel: 'Reopen Years',
+      cancelLabel: 'Cancel',
+      confirmVariant: 'danger',
+    });
+    if (!confirmed) return;
+
+    setMarkingRenewalPaid(true);
+    try {
+      let lastApprovedYear = null;
+      if (mc.acknowledgement_no) {
+        const matches = String(mc.acknowledgement_no).match(/\b(19|20)\d{2}\b/g);
+        if (matches && matches.length > 0) {
+          lastApprovedYear = parseInt(matches[matches.length - 1], 10);
+        }
+      }
+
+      const currentPaid = (mc.renewal_paid_years || String(mc.renewal_paid_year || ''))
+        .split(',')
+        .map(y => parseInt(y.trim(), 10))
+        .filter(y => !isNaN(y));
+
+      const remaining = lastApprovedYear
+        ? currentPaid.filter(y => y <= lastApprovedYear)
+        : [];
+
+      const regYear = mc.reg_date ? new Date(mc.reg_date).getFullYear() : (mc.year ? parseInt(mc.year, 10) : null);
+      const latestRemaining = remaining.length > 0 ? Math.max(...remaining) : null;
+      const newPeriod = latestRemaining ? String(latestRemaining) : (regYear ? String(regYear) : null);
+
+      const payload = {
+        renewal_paid: remaining.length > 0,
+        renewal_paid_years: remaining.length > 0 ? remaining.join(', ') : null,
+        renewal_paid_year: latestRemaining,
+        renewal_period: newPeriod,
+        next_renewal_date: latestRemaining ? `${latestRemaining}-12-31` : (regYear ? `${regYear}-12-31` : null),
+        renewal_payment_status: null,
+        renewal_rejection_reason: null,
+        status: 'Non Active',
+        renewal_date_vise: 'Non Active',
+        active_non_active: 'Non Active'
+      };
+
+      if (remaining.length === 0) {
+        payload.renewal_paid_amount = null;
+        payload.renewal_paid_date = null;
+        payload.renewal_receipt_no = null;
+      }
+
+      const r = await fetch(`${API_BASE}/mcom/${mc.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || 'Failed to reopen payment');
+
+      setRenewalRecord(prev => prev && prev.id === mc.id ? { ...prev, ...payload } : prev);
+      setSelectedRenewalYears([]);
+      showToast('Rejected years reopened successfully.');
+      await load();
+    } catch (err) {
+      showToast(err.message || 'Failed to reopen payment', 'error');
     } finally {
       setMarkingRenewalPaid(false);
     }
@@ -3461,12 +3684,12 @@ export default function MComManagement({ currentUser }) {
                     </td>
                     <td className="mc-td-actions" style={tdActionsStyle}>
                       <div style={{ display: 'flex', gap: 2 }}>
-                        {canViewRecord ? <ActionBtn icon="fas fa-eye" color={theme.blue} title="View" onClick={() => openView(mc)} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
-                        {canHistory ? <ActionBtn icon="fas fa-history" color={theme.text2} title="History" onClick={() => { setSelectedHistoryRecord(mc); setShowHistoryModal(true); }} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
-                        {canEdit ? <ActionBtn icon="fas fa-edit" color={theme.orange} title="Edit" onClick={() => openEdit(mc)} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
-                        {canDelete ? <ActionBtn icon="fas fa-trash" color={theme.red} title="Delete" onClick={() => remove(mc.id)} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
-                        <ActionBtn icon="fas fa-receipt" color={theme.blue} title="View Registration Receipt" onClick={() => openRegistrationReceipt(mc)} />
-                        {(canRenewal || canEdit) && <ActionBtn icon="fas fa-sync-alt" color={theme.green} title="Renewal" onClick={() => openRenewal(mc)} />}
+                        {canViewRecord ? <ActionBtn icon="fas fa-eye" color={theme.blue} title="View" onClick={(e) => { e.stopPropagation(); openView(mc); }} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
+                        {canHistory ? <ActionBtn icon="fas fa-history" color={theme.text2} title="History" onClick={(e) => { e.stopPropagation(); setSelectedHistoryRecord(mc); setShowHistoryModal(true); }} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
+                        {canEdit ? <ActionBtn icon="fas fa-edit" color={theme.orange} title="Edit" onClick={(e) => { e.stopPropagation(); openEdit(mc); }} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
+                        {canDelete ? <ActionBtn icon="fas fa-trash" color={theme.red} title="Delete" onClick={(e) => { e.stopPropagation(); remove(mc.id); }} /> : <div style={{ width: 18, minWidth: 18, flexShrink: 0 }} />}
+                        <ActionBtn icon="fas fa-receipt" color={theme.blue} title="View Registration Receipt" onClick={(e) => { e.stopPropagation(); openRegistrationReceipt(mc); }} />
+                        {(canRenewal || canEdit) && <ActionBtn icon="fas fa-sync-alt" color={theme.green} title="Renewal" onClick={(e) => { e.stopPropagation(); openRenewal(mc); }} />}
                       </div>
                     </td>
                   </tr>
@@ -3597,10 +3820,25 @@ export default function MComManagement({ currentUser }) {
                 <ViewField label="Attendance" value={viewRecord.attendance} />
                 <ViewField label="Audited Account" value={viewRecord.audited_account} />
                 <ViewField label="Building Insurance" value={viewRecord.building_insurance} />
-                <ViewField label="Active / Non Active" value={viewRecord.active_non_active || viewRecord.renewal_date_vise || (viewRecord.renewal_period && parseInt(viewRecord.renewal_period, 10) >= new Date().getFullYear() ? 'Active' : 'Non Active')} />
-                <ViewField label="Renewal Date Vise" value={viewRecord.renewal_date_vise || (viewRecord.renewal_period && parseInt(viewRecord.renewal_period, 10) >= new Date().getFullYear() ? 'Active' : 'Non Active')} />
+                <ViewField label="Active / Non Active" value={(() => {
+                  const rpMatches = String(viewRecord.renewal_period || '').match(/\b(19|20)\d{2}\b/g);
+                  const rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(viewRecord.renewal_period, 10);
+                  if (!isNaN(rpYear)) return rpYear >= new Date().getFullYear() ? 'Active' : 'Non Active';
+                  return viewRecord.active_non_active || viewRecord.renewal_date_vise || 'Non Active';
+                })()} />
+                <ViewField label="Renewal Date Vise" value={(() => {
+                  const rpMatches = String(viewRecord.renewal_period || '').match(/\b(19|20)\d{2}\b/g);
+                  const rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(viewRecord.renewal_period, 10);
+                  if (!isNaN(rpYear)) return rpYear >= new Date().getFullYear() ? 'Active' : 'Non Active';
+                  return viewRecord.renewal_date_vise || 'Non Active';
+                })()} />
                 <ViewField label="AGM Date Vise" value={viewRecord.agm_date_vise || (viewRecord.next_agm_date && new Date(viewRecord.next_agm_date) >= new Date() ? 'Active' : 'Non Active')} />
-                <ViewField label="Renewal Status" value={viewRecord.renewal_status || viewRecord.renewal_date_vise || (viewRecord.renewal_period && parseInt(viewRecord.renewal_period, 10) >= new Date().getFullYear() ? 'Active' : 'Non Active')} />
+                <ViewField label="Renewal Status" value={(() => {
+                  const rpMatches = String(viewRecord.renewal_period || '').match(/\b(19|20)\d{2}\b/g);
+                  const rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(viewRecord.renewal_period, 10);
+                  if (!isNaN(rpYear)) return rpYear >= new Date().getFullYear() ? 'Active' : 'Non Active';
+                  return viewRecord.renewal_status || viewRecord.renewal_date_vise || 'Non Active';
+                })()} />
                 <ViewField label="AGM Status" value={viewRecord.agm_status || viewRecord.agm_date_vise || (viewRecord.next_agm_date && new Date(viewRecord.next_agm_date) >= new Date() ? 'Active' : 'Non Active')} />
               </div>
 
@@ -4011,8 +4249,30 @@ export default function MComManagement({ currentUser }) {
                       </div>
                     )}
                     {payStatus === 'Rejected' && (
-                      <div style={{ fontSize: 11.5, color: '#dc2626', marginTop: 4 }}>
-                        Reason: {mc.renewal_rejection_reason || 'No reason provided'}
+                      <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                        <div style={{ fontSize: 11.5, color: '#dc2626' }}>
+                          Reason: {mc.remark?.replace(/^Payment rejected:\s*/i, '') || mc.renewal_rejection_reason || 'No reason provided'}
+                        </div>
+                        <button
+                          onClick={() => reopenRejectedPayment(mc)}
+                          disabled={markingRenewalPaid}
+                          style={{
+                            background: '#dc2626',
+                            color: '#fff',
+                            border: 'none',
+                            padding: '5px 12px',
+                            borderRadius: 6,
+                            fontSize: 11.5,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5
+                          }}
+                          title="Revert rejected payment and reopen years so they can be marked as paid again"
+                        >
+                          <i className="fas fa-undo" /> Reopen Years to Mark as Paid
+                        </button>
                       </div>
                     )}
                   </div>
@@ -4090,11 +4350,16 @@ export default function MComManagement({ currentUser }) {
                       )
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-end', width: '100%' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', flexWrap: 'wrap', gap: 6 }}>
                           <div style={{ fontSize: 12, fontWeight: 700, color: theme.navy, whiteSpace: 'nowrap' }}>
                             <i className="fas fa-calendar-plus" style={{ marginRight: 6 }} />
-                            {!hasRemainingYears ? 'Paid Years:' : isPartiallyPaid ? 'Mark Remaining Years as Paid:' : 'Select Years to Mark as Paid:'}
+                            {isRejected ? 'Years (Payment Rejected - Select to Mark as Paid):' : !hasRemainingYears ? 'Paid Years:' : isPartiallyPaid ? 'Mark Remaining Years as Paid:' : 'Select Years to Mark as Paid:'}
                           </div>
+                          <div style={{ fontSize: 10.5, fontWeight: 500, color: theme.text3 }}>
+                            Tip: Click any paid year (✓) to reverse it
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', flexWrap: 'wrap' }}>
                           {(() => {
                             let unpaidYears = [];
                             if (originalMultiRows && originalMultiRows.length > 0) {
@@ -4108,6 +4373,12 @@ export default function MComManagement({ currentUser }) {
                               for (let y = regYear; y <= currentYear; y++) {
                                 if (!paidYears.includes(y)) unpaidYears.push(y);
                               }
+                            }
+
+                            let lastApprovedYear = null;
+                            if (mc.acknowledgement_no) {
+                              const ackMatch = String(mc.acknowledgement_no).match(/\b(19|20)\d{2}\b/g);
+                              if (ackMatch && ackMatch.length > 0) lastApprovedYear = parseInt(ackMatch[ackMatch.length - 1], 10);
                             }
 
                             let lastPaidYear = null;
@@ -4143,14 +4414,18 @@ export default function MComManagement({ currentUser }) {
                             return (
                               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                                 {sortedYears.map(y => {
-                                  const isAlreadyPaid = paidYearsList.includes(y) || (lastPaidYear && y <= lastPaidYear && !unpaidYears.includes(y));
+                                  const isAlreadyPaid = (isRejected && (!lastApprovedYear || y > lastApprovedYear))
+                                    ? false
+                                    : (paidYearsList.includes(y) || (lastPaidYear && y <= lastPaidYear && !unpaidYears.includes(y)));
                                   const isSel = selectedRenewalYears.includes(y);
 
                                   if (isAlreadyPaid) {
                                     return (
                                       <button
                                         key={y}
-                                        disabled
+                                        type="button"
+                                        onClick={() => reversePaidYear(mc, y)}
+                                        title={`Paid Year ${y}. Click to reverse/unpay this year.`}
                                         style={{
                                           padding: '4px 10px',
                                           borderRadius: 6,
@@ -4159,13 +4434,15 @@ export default function MComManagement({ currentUser }) {
                                           color: theme.green,
                                           fontSize: 11,
                                           fontWeight: 700,
-                                          cursor: 'not-allowed',
+                                          cursor: 'pointer',
                                           display: 'flex',
                                           alignItems: 'center',
-                                          gap: 4
+                                          gap: 4,
+                                          transition: 'all 0.15s'
                                         }}
                                       >
                                         <i className="fas fa-check" /> {y}
+                                        <i className="fas fa-undo-alt" style={{ fontSize: 9.5, opacity: 0.65, color: '#dc2626', marginLeft: 2 }} title={`Reverse year ${y}`} />
                                       </button>
                                     );
                                   }
@@ -4173,6 +4450,7 @@ export default function MComManagement({ currentUser }) {
                                   return (
                                     <button
                                       key={y}
+                                      type="button"
                                       onClick={() => setSelectedRenewalYears(prev => isSel ? prev.filter(x => x !== y) : [...prev, y])}
                                       style={{
                                         padding: '4px 10px',

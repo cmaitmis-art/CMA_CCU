@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 const theme = {
   navy: '#1a3a6b',
@@ -38,17 +38,30 @@ const btnPrimary = { ...btnBase, background: theme.navy, color: '#fff' };
 const btnOutline = { ...btnBase, background: 'transparent', color: theme.text2, border: `1px solid ${theme.border}` };
 
 const COL_WIDTHS = {
-  'FILE NO': 130,
-  'NAME OF THE APARTMENT': 220,
-  'ADDRESS': 220,
-  'DATE': 120,
+  'FILE NO': 125,
+  'NAME OF THE APARTMENT': 215,
+  'ADDRESS': 215,
+  'DATE': 115,
   'REASON': 220,
   'COMPLAINER DETAILS': 200,
-  'REGISTERED CCU FILE NO': 220,
-  'REMARKS': 'auto',
+  'REGISTERED CCU FILE NO': 200,
+  'REMARKS': 210,
   'STATUS': 195,
   'ACTIONS': 210,
 };
+
+const CFILES_COLUMN_SPECS = [
+  { key: 'FILE NO', width: 125, minWidth: 105, flex: 1 },
+  { key: 'NAME OF THE APARTMENT', width: 215, minWidth: 165, flex: 3 },
+  { key: 'ADDRESS', width: 215, minWidth: 165, flex: 3 },
+  { key: 'DATE', width: 115, minWidth: 95, flex: 0.5 },
+  { key: 'REASON', width: 220, minWidth: 170, flex: 3 },
+  { key: 'COMPLAINER DETAILS', width: 200, minWidth: 160, flex: 2 },
+  { key: 'REGISTERED CCU FILE NO', width: 200, minWidth: 160, flex: 1.5 },
+  { key: 'REMARKS', width: 210, minWidth: 160, flex: 2.5, isFlexible: true },
+  { key: 'STATUS', width: 195, minWidth: 195, maxWidth: 195, flex: 0 },
+  { key: 'ACTIONS', width: 210, minWidth: 210, maxWidth: 210, flex: 0 },
+];
 
 const CATEGORIES_BY_SECTION = {
   'A. Administration': [
@@ -545,6 +558,152 @@ function ViewRow({ label, value }) {
   );
 }
 
+function getUploadUrl(docPath) {
+  if (!docPath) return '';
+  const base = (import.meta.env.VITE_API_URL ?? '/api').trim().replace(/\/api\/?$/, '');
+  const cleanPath = String(docPath).replace(/^\/+/, '');
+  return `${base}/${cleanPath}`;
+}
+
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getLatestTransferInfo(record, { preferTransferred = false } = {}) {
+  if (!record || !record.history) {
+    if (record?.status === 'Transferred') {
+      return {
+        action: 'Transferred',
+        transferredBy: '',
+        transferredFrom: '',
+        transferredTo: record.assigned_department || '',
+        remark: '',
+        documentPath: '',
+        documentName: '',
+        time: '',
+      };
+    }
+    return null;
+  }
+
+  try {
+    const historyArr = typeof record.history === 'string' ? JSON.parse(record.history) : record.history;
+    if (!Array.isArray(historyArr)) return null;
+
+    const reversed = [...historyArr].reverse();
+    const transferAction = preferTransferred
+      ? reversed.find((h) => h.action === 'Transferred')
+      : reversed.find((h) => h.action === 'Transferred' || h.action === 'Returned to CCU');
+
+    if (!transferAction) {
+      if (record.status === 'Transferred') {
+        return {
+          action: 'Transferred',
+          transferredBy: '',
+          transferredFrom: '',
+          transferredTo: record.assigned_department || '',
+          remark: '',
+          documentPath: '',
+          documentName: '',
+          time: '',
+        };
+      }
+      return null;
+    }
+
+    let transferredTo = record.assigned_department || transferAction.to_department || '';
+    if (!transferredTo && transferAction.note && transferAction.action === 'Transferred') {
+      transferredTo = transferAction.note.replace('Transferred to ', '');
+    }
+
+    return {
+      action: transferAction.action,
+      transferredBy: transferAction.name || 'System',
+      transferredFrom: transferAction.from_department || 'ADMIN',
+      transferredTo,
+      remark: transferAction.remark || '',
+      documentPath: transferAction.document_path || '',
+      documentName: transferAction.document_name || '',
+      time: transferAction.time || '',
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+function TransferDetailRows({ record }) {
+  if (!record) return null;
+
+  if (record.status === 'Transferred') {
+    const info = getLatestTransferInfo(record, { preferTransferred: true });
+    if (!info) return null;
+    return (
+      <>
+        <ViewRow label="Transferred From" value={info.transferredFrom} />
+        <ViewRow label="Transferred To" value={info.transferredTo} />
+        <ViewRow label="Transferred By" value={info.transferredBy} />
+        {info.remark && (
+          <ViewRow
+            label="Transfer Remark"
+            value={<span style={{ whiteSpace: 'pre-wrap' }}>{info.remark}</span>}
+          />
+        )}
+        {info.documentPath && (
+          <ViewRow
+            label="Transfer Attachment"
+            value={
+              <a
+                href={getUploadUrl(info.documentPath)}
+                target="_blank"
+                rel="noreferrer"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: `${theme.blue}10`, color: theme.blue, borderRadius: 6, textDecoration: 'none', fontWeight: 500, fontSize: 13 }}
+              >
+                <i className="fas fa-file-download" /> {info.documentName || 'Download / View Attachment'}
+              </a>
+            }
+          />
+        )}
+      </>
+    );
+  }
+
+  const latest = getLatestTransferInfo(record);
+  if (latest && latest.action === 'Returned to CCU' && (latest.remark || latest.documentPath)) {
+    return (
+      <>
+        <ViewRow label="Returned From" value={latest.transferredFrom} />
+        <ViewRow label="Returned By" value={latest.transferredBy} />
+        {latest.remark && (
+          <ViewRow
+            label="Return Remark"
+            value={<span style={{ whiteSpace: 'pre-wrap' }}>{latest.remark}</span>}
+          />
+        )}
+        {latest.documentPath && (
+          <ViewRow
+            label="Return Attachment"
+            value={
+              <a
+                href={getUploadUrl(latest.documentPath)}
+                target="_blank"
+                rel="noreferrer"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: `${theme.blue}10`, color: theme.blue, borderRadius: 6, textDecoration: 'none', fontWeight: 500, fontSize: 13 }}
+              >
+                <i className="fas fa-file-download" /> {latest.documentName || 'Download / View Attachment'}
+              </a>
+            }
+          />
+        )}
+      </>
+    );
+  }
+
+  return null;
+}
+
 function TransferModal({ isOpen, onClose, onSave, record, currentUser }) {
   const userDept = (currentUser?.department || '').toUpperCase();
 
@@ -559,17 +718,95 @@ function TransferModal({ isOpen, onClose, onSave, record, currentUser }) {
       ];
 
   const [department, setDepartment] = useState(deptOptions[0]?.value || 'LEGAL');
+  const [showRemark, setShowRemark] = useState(false);
+  const [remark, setRemark] = useState('');
+  const [showAttachment, setShowAttachment] = useState(false);
+  const [fileObj, setFileObj] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setDepartment(deptOptions[0]?.value || 'LEGAL');
+      setShowRemark(false);
+      setRemark('');
+      setShowAttachment(false);
+      setFileObj(null);
+      setIsSubmitting(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  }, [isOpen, record?.id, userDept]);
 
   if (!isOpen || !record) return null;
 
+  const hasRemarkText = remark.trim().length > 0;
+
+  const toggleRemark = () => {
+    if (showRemark) {
+      setShowRemark(false);
+      setRemark('');
+    } else {
+      setShowRemark(true);
+    }
+  };
+
+  const clearAttachment = (collapse = true) => {
+    setFileObj(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    if (collapse) {
+      setShowAttachment(false);
+    }
+  };
+
+  const toggleAttachment = () => {
+    if (showAttachment) {
+      clearAttachment(true);
+    } else {
+      setShowAttachment(true);
+    }
+  };
+
+  const handleTransferClick = async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await onSave(department, {
+        remark: showRemark ? remark.trim() : '',
+        fileObj: showAttachment ? fileObj : null,
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const optionalPillStyle = (active) => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '5px 11px',
+    borderRadius: 8,
+    fontSize: 12,
+    fontWeight: 500,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    transition: 'all 0.15s ease',
+    border: active ? `1px solid ${theme.blue}55` : '1px dashed #cbd5e1',
+    background: active ? `${theme.blue}10` : '#f8fafc',
+    color: active ? theme.navy : theme.text2,
+  });
+
   return (
-    <div style={overlayStyle} onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div style={overlayStyle} onClick={(e) => !isSubmitting && e.target === e.currentTarget && onClose()}>
       <div style={{ ...modalStyle, maxWidth: 500, display: 'flex', flexDirection: 'column' }}>
         <div style={modalHeader}>
           <span style={{ fontSize: 16, fontWeight: 700 }}>Transfer C-File</span>
-          <button onClick={onClose} style={closeBtnStyle}>✕</button>
+          <button onClick={onClose} disabled={isSubmitting} style={closeBtnStyle}>✕</button>
         </div>
-        <div style={{ padding: 22 }}>
+        <div style={{ padding: 22, overflowY: 'auto' }}>
           <div style={{ marginBottom: 15, fontSize: 13, color: theme.text2 }}>
             Transfer <strong>{record.file_no}</strong> to a department for further action.
           </div>
@@ -578,16 +815,183 @@ function TransferModal({ isOpen, onClose, onSave, record, currentUser }) {
               value={department}
               onChange={(e) => setDepartment(e.target.value)}
               style={inputStyle}
+              disabled={isSubmitting}
             >
               {deptOptions.map(opt => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
           </FormField>
+
+          <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={toggleRemark}
+              disabled={isSubmitting}
+              aria-expanded={showRemark}
+              style={optionalPillStyle(showRemark)}
+            >
+              <i
+                className={`fas ${showRemark && hasRemarkText ? 'fa-check' : showRemark ? 'fa-minus' : 'fa-plus'}`}
+                style={{ fontSize: 10, color: showRemark ? theme.blue : theme.text3 }}
+              />
+              <i className="fas fa-comment-alt" style={{ fontSize: 11, color: showRemark ? theme.blue : theme.text3 }} />
+              {showRemark && hasRemarkText ? 'Remark Added' : 'Add Remark'}
+            </button>
+
+            <button
+              type="button"
+              onClick={toggleAttachment}
+              disabled={isSubmitting}
+              aria-expanded={showAttachment}
+              style={optionalPillStyle(showAttachment)}
+            >
+              <i
+                className={`fas ${showAttachment && fileObj ? 'fa-check' : showAttachment ? 'fa-minus' : 'fa-plus'}`}
+                style={{ fontSize: 10, color: showAttachment ? theme.blue : theme.text3 }}
+              />
+              <i className="fas fa-paperclip" style={{ fontSize: 11, color: showAttachment ? theme.blue : theme.text3 }} />
+              {showAttachment && fileObj ? 'File Attached' : 'Attach File'}
+            </button>
+          </div>
+
+          {showRemark && (
+            <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <label htmlFor="cfile_transfer_remark" style={{ fontSize: 12, fontWeight: 500, color: theme.text2 }}>
+                  Remark (Optional)
+                </label>
+                <button
+                  type="button"
+                  onClick={() => { setShowRemark(false); setRemark(''); }}
+                  disabled={isSubmitting}
+                  style={{ background: 'none', border: 'none', color: theme.text3, cursor: 'pointer', fontSize: 11, padding: '2px 4px', fontFamily: 'inherit' }}
+                  title="Remove remark"
+                >
+                  ✕ Remove
+                </button>
+              </div>
+              <textarea
+                id="cfile_transfer_remark"
+                name="cfile_transfer_remark"
+                rows={2}
+                value={remark}
+                onChange={(e) => setRemark(e.target.value)}
+                placeholder="Add a brief remark for the receiving department..."
+                disabled={isSubmitting}
+                style={{ ...inputStyle, minHeight: 68, resize: 'vertical', fontFamily: 'inherit' }}
+                autoFocus
+              />
+            </div>
+          )}
+
+          {showAttachment && (
+            <div style={{ marginTop: 14, padding: '11px 13px', background: `${theme.blue}08`, border: `1px dashed ${theme.blue}45`, borderRadius: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: theme.navy }}>
+                  <i className="fas fa-paperclip" style={{ marginRight: 6 }} />
+                  Attach Document (Optional)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => clearAttachment(true)}
+                  disabled={isSubmitting}
+                  style={{ background: 'none', border: 'none', color: theme.text3, cursor: 'pointer', fontSize: 11, padding: '2px 4px', fontFamily: 'inherit' }}
+                  title="Remove attachment"
+                >
+                  ✕ Remove
+                </button>
+              </div>
+
+              <input
+                ref={fileInputRef}
+                id="cfile_transfer_file"
+                type="file"
+                aria-label="Browse transfer document"
+                onChange={(e) => {
+                  if (e.target.files && e.target.files[0]) {
+                    setFileObj(e.target.files[0]);
+                  }
+                }}
+                style={{ display: 'none' }}
+              />
+
+              {!fileObj ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isSubmitting}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '6px 12px',
+                      borderRadius: 6,
+                      border: `1px solid ${theme.blue}45`,
+                      background: '#fff',
+                      color: theme.navy,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    <i className="fas fa-folder-open" style={{ color: theme.blue }} /> Browse File
+                  </button>
+                  <span style={{ fontSize: 11, color: theme.text3 }}>
+                    PDF, Image, Word, Excel, etc.
+                  </span>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: '#fff', padding: '7px 10px', borderRadius: 6, border: `1px solid ${theme.border}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+                    <i className="fas fa-file-alt" style={{ color: theme.blue, fontSize: 15, flexShrink: 0 }} />
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: theme.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={fileObj.name}>
+                        {fileObj.name}
+                      </div>
+                      {Number.isFinite(fileObj.size) && (
+                        <div style={{ fontSize: 11, color: theme.text3 }}>
+                          {formatFileSize(fileObj.size)}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isSubmitting}
+                      style={{ background: '#f1f5f9', border: `1px solid ${theme.border}`, color: theme.text2, borderRadius: 5, padding: '3px 8px', fontSize: 11, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit' }}
+                    >
+                      Change
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => clearAttachment(false)}
+                      disabled={isSubmitting}
+                      style={{ background: 'none', border: 'none', color: theme.red, cursor: 'pointer', fontSize: 13, padding: '2px 4px', lineHeight: 1 }}
+                      title="Clear selected file"
+                      aria-label="Clear selected file"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <div style={{ padding: '14px 22px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-          <button onClick={onClose} style={btnOutline}>Cancel</button>
-          <button onClick={() => onSave(department)} style={btnPrimary}><i className="fas fa-share" /> Transfer</button>
+          <button onClick={onClose} disabled={isSubmitting} style={btnOutline}>Cancel</button>
+          <button
+            onClick={handleTransferClick}
+            disabled={isSubmitting}
+            style={{ ...btnPrimary, opacity: isSubmitting ? 0.75 : 1, cursor: isSubmitting ? 'wait' : 'pointer' }}
+          >
+            <i className={isSubmitting ? 'fas fa-spinner fa-spin' : 'fas fa-share'} /> {isSubmitting ? 'Transferring...' : 'Transfer'}
+          </button>
         </div>
       </div>
     </div>
@@ -775,24 +1179,7 @@ function ViewModal({ isOpen, onClose, record = null, onEdit, onDelete }) {
   const daysElapsed = calculateDaysElapsed(record.date);
   const isPending = isOverduePending(record);
 
-  let transferredBy = '';
-  let transferredTo = record.assigned_department || '';
-  let transferredFrom = '';
-  if (record.status === 'Transferred' && record.history) {
-    try {
-      const historyArr = typeof record.history === 'string' ? JSON.parse(record.history) : record.history;
-      if (Array.isArray(historyArr)) {
-        const transferAction = [...historyArr].reverse().find(h => h.action === 'Transferred');
-        if (transferAction) {
-          transferredBy = transferAction.name || 'System';
-          transferredFrom = transferAction.from_department || 'ADMIN';
-          if (!transferredTo && transferAction.note) {
-            transferredTo = transferAction.note.replace('Transferred to ', '');
-          }
-        }
-      }
-    } catch (e) { }
-  }
+
 
   return (
     <div style={overlayStyle} onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -821,13 +1208,7 @@ function ViewModal({ isOpen, onClose, record = null, onEdit, onDelete }) {
               {record.status}
             </span>
           } />
-          {record.status === 'Transferred' && (
-            <>
-              <ViewRow label="Transferred From" value={transferredFrom} />
-              <ViewRow label="Transferred To" value={transferredTo} />
-              <ViewRow label="Transferred By" value={transferredBy} />
-            </>
-          )}
+          <TransferDetailRows record={record} />
           <ViewRow label="Date" value={`${formatDisplayDate(record.date)}${daysElapsed !== null ? ` (${daysElapsed} days overdue)` : ''}`} />
           <ViewRow label="Category" value={record.category} />
           <ViewRow label="CCU File No" value={record.registered_ccu_file_no} />
@@ -893,6 +1274,7 @@ export {
   btnPrimary,
   btnOutline,
   COL_WIDTHS,
+  CFILES_COLUMN_SPECS,
   CATEGORIES_BY_SECTION,
   ALL_CATEGORIES,
   STATUS_OPTIONS,
@@ -906,6 +1288,9 @@ export {
   ActionBtn,
   sheetToRowObjects,
   toBackendRecordFromExcelRow,
+  getUploadUrl,
+  getLatestTransferInfo,
+  TransferDetailRows,
   TransferModal,
   CloseModal,
   FormModal,

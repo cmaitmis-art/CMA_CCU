@@ -3,6 +3,46 @@ import './Topbar.css';
 import { getRoleLabel } from '../utils/roleLabel.js';
 import { fetchCalendarEvents, createCalendarEvent, deleteCalendarEvent, fetchUserPreferences, setUserPreference } from '../api.js';
 
+const VISIBILITY_COLORS = {
+  Everyone: '#10b981',
+  CCU: '#3b82f6',
+  'CCU Team': '#3b82f6',
+  Legal: '#8b5cf6',
+  Technical: '#f59e0b',
+  Finance: '#ec4899',
+};
+
+export function getCalendarVisibilityColor(visibility) {
+  return VISIBILITY_COLORS[visibility] || '#94a3b8';
+}
+
+export function getCalendarVisibilityLabel(visibility) {
+  if (visibility === 'Only Me') return 'Me';
+  if (visibility === 'Everyone') return 'All';
+  if (visibility === 'CCU Team') return 'CCU';
+  return visibility || 'Me';
+}
+
+export function isCalendarEventVisible(event, currentUser) {
+  if (!event) return false;
+  if (event.visibility === 'Everyone') return true;
+  const dept = String(currentUser?.department || '').trim().toUpperCase();
+  const role = String(currentUser?.role || '').trim().toLowerCase();
+  if (event.visibility === 'CCU' || event.visibility === 'CCU Team') {
+    if (role === 'admin' || role.includes('ccu') || dept === 'CCU') return true;
+  }
+  if (event.visibility === 'Legal') {
+    if (dept === 'LEGAL' || role.includes('legal') || role === 'admin') return true;
+  }
+  if (event.visibility === 'Technical') {
+    if (dept === 'TECHNICAL' || role.includes('technical') || role === 'admin') return true;
+  }
+  if (event.visibility === 'Finance') {
+    if (dept === 'FINANCE' || dept.includes('FINANCE') || role.includes('finance') || role === 'admin') return true;
+  }
+  return event.authorId === (currentUser?.username || currentUser?.id || 'anon');
+}
+
 function formatDateTime(value) {
   if (!value) return '';
   const date = new Date(value);
@@ -80,21 +120,9 @@ function Topbar({ currentUser, currentPage, onToggleSidebar, onLogout, onNavigat
     }
   };
 
-  const visibleEvents = events.filter(e => {
-    if (e.visibility === 'Everyone') return true;
-    const dept = String(currentUser?.department || '').toUpperCase();
-    const role = String(currentUser?.role || '').toLowerCase();
-    if (e.visibility === 'CCU') {
-      if (role === 'admin' || role.includes('ccu') || dept === 'CCU') return true;
-    }
-    if (e.visibility === 'Legal') {
-      if (dept === 'LEGAL' || role === 'admin') return true;
-    }
-    if (e.visibility === 'Technical') {
-      if (dept === 'TECHNICAL' || role === 'admin') return true;
-    }
-    return e.authorId === (currentUser?.username || currentUser?.id || 'anon');
-  }).sort((a, b) => new Date(a.date) - new Date(b.date));
+  const visibleEvents = events
+    .filter((e) => isCalendarEventVisible(e, currentUser))
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
 
   const daysInMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
   const firstDayOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
@@ -324,7 +352,7 @@ function Topbar({ currentUser, currentPage, onToggleSidebar, onLogout, onNavigat
                   const isToday = e.date === todayStr;
                   const dDate = new Date(e.date);
                   const label = isToday ? 'Today' : dDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-                  const dotColor = e.visibility === 'Everyone' ? '#10b981' : e.visibility === 'CCU' ? '#3b82f6' : e.visibility === 'Legal' ? '#8b5cf6' : e.visibility === 'Technical' ? '#f59e0b' : '#94a3b8';
+                  const dotColor = getCalendarVisibilityColor(e.visibility);
                   return (
                     <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 8, background: isToday ? '#eff6ff' : '#f8fafc', padding: '6px 8px', borderRadius: 7, border: isToday ? '1px solid #bfdbfe' : '1px solid #e2e8f0' }}>
                       <div style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
@@ -445,7 +473,7 @@ function Topbar({ currentUser, currentPage, onToggleSidebar, onLogout, onNavigat
                       {dayEvents.length > 0 && (
                         <div style={{ display: 'flex', justifyContent: 'center', gap: 2, marginTop: 2 }}>
                           {dayEvents.slice(0, 3).map(e => (
-                            <div key={e.id} style={{ width: 4, height: 4, borderRadius: '50%', background: isSelected ? 'rgba(255,255,255,0.8)' : (e.visibility === 'Everyone' ? '#10b981' : e.visibility === 'CCU Team' ? '#3b82f6' : '#f59e0b') }} />
+                            <div key={e.id} style={{ width: 4, height: 4, borderRadius: '50%', background: isSelected ? 'rgba(255,255,255,0.8)' : getCalendarVisibilityColor(e.visibility) }} />
                           ))}
                         </div>
                       )}
@@ -474,9 +502,9 @@ function Topbar({ currentUser, currentPage, onToggleSidebar, onLogout, onNavigat
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10, maxHeight: 100, overflowY: 'auto' }}>
                         {selEvents.map(e => (
                           <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'white', padding: '5px 8px', borderRadius: 6, border: '1px solid #e2e8f0' }}>
-                            <div style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, background: e.visibility === 'Everyone' ? '#10b981' : e.visibility === 'CCU Team' ? '#3b82f6' : '#f59e0b' }} />
+                            <div style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, background: getCalendarVisibilityColor(e.visibility) }} />
                             <span style={{ flex: 1, fontSize: 11, color: '#1e293b', fontWeight: '500', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.title}</span>
-                            <span style={{ fontSize: 9, color: '#94a3b8', background: '#f8fafc', padding: '1px 5px', borderRadius: 6, flexShrink: 0 }}>{e.visibility === 'Only Me' ? 'Me' : e.visibility === 'CCU Team' ? 'CCU' : 'All'}</span>
+                            <span style={{ fontSize: 9, color: '#94a3b8', background: '#f8fafc', padding: '1px 5px', borderRadius: 6, flexShrink: 0 }}>{getCalendarVisibilityLabel(e.visibility)}</span>
                             {(e.authorId === (currentUser?.username || currentUser?.id || 'anon') || currentUser?.role?.toLowerCase() === 'admin') && (
                               <i className="fas fa-trash" style={{ color: '#fca5a5', cursor: 'pointer', fontSize: 10, transition: 'color 0.15s', flexShrink: 0 }} onClick={() => handleDeleteEvent(e.id)} onMouseOver={e => e.currentTarget.style.color = '#ef4444'} onMouseOut={e => e.currentTarget.style.color = '#fca5a5'}></i>
                             )}
@@ -487,11 +515,12 @@ function Topbar({ currentUser, currentPage, onToggleSidebar, onLogout, onNavigat
 
                     <div style={{ display: 'flex', gap: 6 }}>
                       <input className="cal-input" type="text" placeholder="Add an event..." value={newEvent.title} onChange={e => setNewEvent({...newEvent, title: e.target.value})} onKeyDown={e => { if(e.key === 'Enter') handleAddEvent(); }} style={{ flex: 1, padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 7, fontSize: 11, boxSizing: 'border-box', background: 'white', transition: 'border-color 0.2s' }} />
-                      <select className="cal-input" value={newEvent.visibility} onChange={e => setNewEvent({...newEvent, visibility: e.target.value})} style={{ width: 80, padding: '6px 3px', border: '1px solid #cbd5e1', borderRadius: 7, fontSize: 10, boxSizing: 'border-box', background: 'white' }}>
+                      <select className="cal-input" aria-label="Event visibility" value={newEvent.visibility} onChange={e => setNewEvent({...newEvent, visibility: e.target.value})} style={{ width: 80, padding: '6px 3px', border: '1px solid #cbd5e1', borderRadius: 7, fontSize: 10, boxSizing: 'border-box', background: 'white' }}>
                         <option value="Only Me">Only Me</option>
                         <option value="CCU">CCU</option>
                         <option value="Legal">Legal</option>
                         <option value="Technical">Technical</option>
+                        <option value="Finance">Finance</option>
                         <option value="Everyone">Everyone</option>
                       </select>
                       <button className="cal-btn" onClick={handleAddEvent} style={{ background: '#3b82f6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 7, cursor: 'pointer', fontSize: 11, fontWeight: '700' }}>+</button>
@@ -640,6 +669,11 @@ function Topbar({ currentUser, currentPage, onToggleSidebar, onLogout, onNavigat
               <div className="profile-dd-item" onClick={() => { onNavigate('profile'); setShowProfile(false); }}>
                 <i className="fas fa-user-circle"></i>My Profile
               </div>
+              {currentUser?.isSuperAdmin && (
+                <div className="profile-dd-item" onClick={() => { window.location.href = '/system-control'; setShowProfile(false); }} style={{ color: '#60a5fa' }}>
+                  <i className="fas fa-sliders-h"></i>System Control
+                </div>
+              )}
               <div className="profile-dd-item danger" onClick={onLogout}>
                 <i className="fas fa-sign-out-alt"></i>Logout
               </div>

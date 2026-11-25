@@ -3,6 +3,8 @@ import Sidebar from './components/Sidebar';
 import Topbar from './components/Topbar';
 import Dashboard from './pages/Dashboard_enhanced.jsx'; // Landing page eagerly loaded for instant display
 import CMALogin from './pages/Login.jsx';
+import MaintenanceScreen from './pages/MaintenanceScreen.jsx';
+import SystemControl from './pages/SystemControl.jsx';
 import WelcomeAlert from './components/WelcomeAlert.jsx';
 import PopupAlerts from './components/PopupAlerts.jsx';
 import AIChatWidget from './components/AIChatWidget.jsx';
@@ -57,6 +59,42 @@ function buildUserSession(user) {
 }
 
 function CMAApp() {
+  const [currentPath, setCurrentPath] = useState(() => window.location.pathname.toLowerCase());
+  const [isMaintenance, setIsMaintenance] = useState(false);
+
+  useEffect(() => {
+    const handlePopState = () => setCurrentPath(window.location.pathname.toLowerCase());
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    const checkSystemStatus = async () => {
+      try {
+        const res = await fetch('/api/system-control/status');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && typeof data.maintenance === 'boolean') {
+            setIsMaintenance(data.maintenance);
+          }
+        }
+      } catch (e) {
+        // ignore network error
+      }
+    };
+
+    checkSystemStatus();
+    const interval = setInterval(checkSystemStatus, 10000);
+
+    const onMaintenanceEvent = () => setIsMaintenance(true);
+    window.addEventListener('cma:maintenance-active', onMaintenanceEvent);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('cma:maintenance-active', onMaintenanceEvent);
+    };
+  }, []);
+
   const [currentUser, setCurrentUser] = useState(() => {
     const saved = sessionStorage.getItem('cma_currentUser');
     try {
@@ -70,6 +108,7 @@ function CMAApp() {
 
   const getFirstAvailablePage = (user) => {
     if (!user) return 'dashboard';
+    if (user.isSuperAdmin) return 'dashboard';
     if (user.role?.toLowerCase() === 'admin') return 'dashboard';
     const managedModules = ['dashboard', 'registration', 'renewal_approval', 'mc', 'mcom', 'cfiles', 'complains', 'discussion', 'notifications', 'records', 'customer_history', 'reports', 'users', 'profile'];
     for (const mod of managedModules) {
@@ -79,6 +118,7 @@ function CMAApp() {
   };
 
   const hasAccess = (modId) => {
+    if (currentUser?.isSuperAdmin) return true;
     if (currentUser?.role?.toLowerCase() === 'admin') return true;
     const managedModules = ['dashboard', 'registration', 'renewal_approval', 'mc', 'mcom', 'cfiles', 'complains', 'discussion', 'notifications', 'records', 'customer_history', 'reports', 'users', 'profile'];
     if (!managedModules.includes(modId)) return true;
@@ -97,6 +137,7 @@ function CMAApp() {
 
     if (currentUser) {
       const hasAccessInit = (modId) => {
+        if (currentUser.isSuperAdmin) return true;
         if (currentUser.role?.toLowerCase() === 'admin') return true;
         const managedModules = ['dashboard', 'registration', 'renewal_approval', 'mc', 'mcom', 'cfiles', 'complains', 'discussion', 'notifications', 'records', 'customer_history', 'reports', 'users', 'profile'];
         if (!managedModules.includes(modId)) return true;
@@ -167,7 +208,7 @@ function CMAApp() {
     try {
       sessionStorage.setItem('cma_currentPage', currentPage);
       // Log page navigation
-      if (currentUser) {
+      if (currentUser && !currentUser.isSuperAdmin) {
         Logger.logPageNavigation('(previous)', currentPage, currentUser);
       }
     } catch (e) {
@@ -215,7 +256,7 @@ function CMAApp() {
   };
 
   useEffect(() => {
-    if (!currentUser?.id) return;
+    if (!currentUser?.id || currentUser?.isSuperAdmin) return;
     const pingAndUpdate = async () => {
       try {
         const res = await pingUser(currentUser.id);
@@ -242,17 +283,35 @@ function CMAApp() {
   }, [currentUser?.id]);
 
   const handleLogout = () => {
+    const isSuper = currentUser?.isSuperAdmin;
     const username = currentUser?.username;
     setCurrentUser(null);
     sessionStorage.removeItem('cma_currentUser');
     sessionStorage.removeItem('cma_dashboard_reminder_shown');
+    sessionStorage.removeItem('cma_super_admin_bypass');
+    sessionStorage.removeItem('super_admin_token');
 
-    // Log user logout
-    if (username) {
+    // Only log regular user logout
+    if (username && !isSuper) {
       Logger.logLogout(username);
       apiLogout(username).catch(() => { });
     }
   };
+
+  const isSuperAdminBypass = Boolean(
+    sessionStorage.getItem('super_admin_token') &&
+    sessionStorage.getItem('cma_super_admin_bypass') === 'true'
+  );
+
+  const isSystemControl = currentPath.startsWith('/system-control') || currentPath.startsWith('/super-admin');
+
+  if (isSystemControl) {
+    return <SystemControl />;
+  }
+
+  if (isMaintenance && !isSuperAdminBypass) {
+    return <MaintenanceScreen onStatusChange={(active) => setIsMaintenance(active)} />;
+  }
 
   const isPublicPortal = window.location.pathname.toLowerCase().startsWith('/renewal');
 
@@ -270,6 +329,47 @@ function CMAApp() {
 
   return (
     <ConfirmDialogProvider>
+      {isSuperAdminBypass && isMaintenance && (
+        <div style={{
+          backgroundColor: '#991b1b',
+          color: '#fee2e2',
+          padding: '8px 20px',
+          fontSize: '13px',
+          fontWeight: 600,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderBottom: '1px solid #dc2626',
+          zIndex: 99999,
+          position: 'sticky',
+          top: 0,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span>🛡️</span>
+            <span>
+              <strong>SUPER ADMIN BYPASS ACTIVE:</strong> System is currently in Maintenance Mode (OFF for normal users).
+            </span>
+          </div>
+          <button
+            onClick={() => { window.location.href = '/system-control'; }}
+            style={{
+              backgroundColor: '#ef4444',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '6px',
+              padding: '4px 12px',
+              fontSize: '12px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <span>⚙️ System Control</span>
+          </button>
+        </div>
+      )}
       {showWelcome && (
         <WelcomeAlert
           userName={currentUser.name}

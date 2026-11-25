@@ -64,6 +64,7 @@ const chatRoutes = require('./routes/chat');
 const calendarEventsRoutes = require('./routes/calendarEvents');
 const userPrefsRoutes = require('./routes/userPrefs');
 const userDraftsRoutes = require('./routes/userDrafts');
+const { router: systemControlRoutes, maintenanceMiddleware } = require('./routes/systemControl');
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -141,6 +142,13 @@ if (resolvedFrontendPath) {
   app.use(express.static(resolvedFrontendPath));
 }
 
+
+// ── System Control Route (Always available for Super Admin) ────────────────
+app.use('/api/system-control', systemControlRoutes);
+
+// ── System Maintenance Enforcement Middleware ─────────────────────────────
+// When Maintenance Mode is active, this blocks all normal user/staff API requests
+app.use(maintenanceMiddleware);
 
 // ── Mount API Routes ────────────────────────────────────────────────────────
 
@@ -373,15 +381,22 @@ async function runRenewalStatusCheck(models) {
 
   try {
     const allMcs = await ManagementCorporation.findAll({
-      attributes: ['id', 'status', 'renewal_period', 'next_agm_date', 'agm_date', 'renewal_date_vise', 'agm_date_vise', 'next_renewal_date', 'renewal_payment_status'],
+      attributes: ['id', 'status', 'renewal_period', 'next_agm_date', 'agm_date', 'renewal_date_vise', 'agm_date_vise', 'next_renewal_date', 'renewal_payment_status', 'renewal_paid_year', 'renewal_paid_years', 'reg_date', 'year'],
     });
     for (const mc of allMcs) {
       const updates = {};
       const lastPaid = getLastPaidYear(mc);
-      const isPaidCurrent = (lastPaid !== null && lastPaid >= currentYear) || (mc.renewal_payment_status === 'Approved');
+      const isPaidCurrent = lastPaid !== null && lastPaid >= currentYear;
 
-      // 1. renewal_date_vise
-      if (!mc.renewal_date_vise || mc.renewal_date_vise.trim() === '' || mc.renewal_date_vise === '-') {
+      // 1. renewal_date_vise: If last paid year is past (< currentYear), must be Non Active
+      if (lastPaid !== null && lastPaid < currentYear) {
+        if (mc.renewal_date_vise !== 'Non Active') {
+          updates.renewal_date_vise = 'Non Active';
+        }
+        if (mc.renewal_payment_status !== 'Pending Approval' && mc.status !== 'New' && mc.status !== 'Pending' && mc.status !== 'Non Active') {
+          updates.status = 'Non Active';
+        }
+      } else if (!mc.renewal_date_vise || mc.renewal_date_vise.trim() === '' || mc.renewal_date_vise === '-') {
         if (isPaidCurrent || mc.status === 'Active') {
           updates.renewal_date_vise = 'Active';
         } else if (lastPaid !== null && lastPaid < currentYear) {
@@ -423,14 +438,27 @@ async function runRenewalStatusCheck(models) {
   try {
     if (McomRecord) {
       const allMcoms = await McomRecord.findAll({
-        attributes: ['id', 'status', 'renewal_period', 'agm_date', 'renewal_date_vise', 'agm_date_vise', 'active_non_active', 'renewal_status', 'agm_status', 'next_renewal_date', 'renewal_payment_status'],
+        attributes: ['id', 'status', 'renewal_period', 'agm_date', 'renewal_date_vise', 'agm_date_vise', 'active_non_active', 'renewal_status', 'agm_status', 'next_renewal_date', 'renewal_payment_status', 'renewal_paid_year', 'renewal_paid_years', 'reg_date', 'year'],
       });
       for (const mcom of allMcoms) {
         const updates = {};
         const lastPaid = getLastPaidYear(mcom);
-        const isPaidCurrent = (lastPaid !== null && lastPaid >= currentYear) || (mcom.renewal_payment_status === 'Approved');
+        const isPaidCurrent = lastPaid !== null && lastPaid >= currentYear;
 
-        if (!mcom.renewal_date_vise || mcom.renewal_date_vise.trim() === '' || mcom.renewal_date_vise === '-') {
+        if (lastPaid !== null && lastPaid < currentYear) {
+          if (mcom.renewal_date_vise !== 'Non Active') {
+            updates.renewal_date_vise = 'Non Active';
+          }
+          if (mcom.active_non_active !== 'Non Active') {
+            updates.active_non_active = 'Non Active';
+          }
+          if (mcom.renewal_status !== 'Non Active') {
+            updates.renewal_status = 'Non Active';
+          }
+          if (mcom.renewal_payment_status !== 'Pending Approval' && mcom.status !== 'New' && mcom.status !== 'Pending' && mcom.status !== 'Non Active') {
+            updates.status = 'Non Active';
+          }
+        } else if (!mcom.renewal_date_vise || mcom.renewal_date_vise.trim() === '' || mcom.renewal_date_vise === '-') {
           if (isPaidCurrent || mcom.status === 'Active') {
             updates.renewal_date_vise = 'Active';
           } else if (lastPaid !== null && lastPaid < currentYear) {
@@ -438,8 +466,8 @@ async function runRenewalStatusCheck(models) {
           }
         }
         if (updates.renewal_date_vise) {
-          if (!mcom.active_non_active) updates.active_non_active = updates.renewal_date_vise;
-          if (!mcom.renewal_status) updates.renewal_status = updates.renewal_date_vise;
+          updates.active_non_active = updates.renewal_date_vise;
+          updates.renewal_status = updates.renewal_date_vise;
         }
 
         if (!mcom.next_renewal_date && lastPaid) {

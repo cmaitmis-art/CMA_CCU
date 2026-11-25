@@ -952,7 +952,7 @@ function SystemRolesTab({ rolesList, loadRoles }) {
 /* ── Main Component ── */
 
 function UserAdmin({ currentUser, onUserUpdated }) {
-  const isAdmin = String(currentUser?.role || '').trim().toLowerCase() === 'admin';
+  const isAdmin = String(currentUser?.role || '').trim().toLowerCase() === 'admin' || Boolean(currentUser?.isSuperAdmin);
   const confirm = useConfirmDialog();
 
   const [activeTab, setActiveTab] = useState(() => {
@@ -1265,6 +1265,7 @@ function UserAdmin({ currentUser, onUserUpdated }) {
                     <option value="CCU">CCU</option>
                     <option value="Legal">Legal</option>
                     <option value="Technical">Technical</option>
+                    <option value="Finance">Finance</option>
                     <option value="IT / System">IT / System</option>
                     <option value="Administration">Administration</option>
                   </select>
@@ -1473,7 +1474,7 @@ function UserAdmin({ currentUser, onUserUpdated }) {
                 <Field label="Full Name *" value={formData.name} placeholder="e.g. John Doe" onChange={v => setFormData(p => ({ ...p, name: v }))} />
                 <SelectField label="Department *" value={formData.department}
                   onChange={v => setFormData(p => ({ ...p, department: v }))}
-                  options={['CCU', 'Technical', 'Legal', 'IT / System', 'Administration', 'Other']} />
+                  options={['CCU', 'Technical', 'Legal', 'Finance', 'IT / System', 'Administration', 'Other']} />
                 <Field label="Job Role (Designation)" value={formData.designation} placeholder="e.g. Legal Officer" onChange={v => setFormData(p => ({ ...p, designation: v }))} />
                 <div>
                   <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: theme.text2, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 6 }}>System Access Role *</label>

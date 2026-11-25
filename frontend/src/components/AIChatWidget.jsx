@@ -43,6 +43,8 @@ export default function AIChatWidget() {
   useEffect(() => {
     let intervalId;
     const pollData = async () => {
+      const userStr = sessionStorage.getItem('cma_currentUser');
+      if (!userStr) return; // Do not poll unread counts if no user is logged in
       try {
         const unreadData = await fetchUnreadCounts();
         let total = 0;

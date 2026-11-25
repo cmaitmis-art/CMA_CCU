@@ -1,11 +1,13 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { useConfirmDialog } from '../ConfirmDialogContext.jsx';
 import '../CMAStyles.css';
+import '../components/mc-management/MCManagement.css';
 import HistoryModal from '../components/HistoryModal.jsx';
 import GenericExportModal from '../components/GenericExportModal.jsx';
 import { exportToPdfPrint } from '../utils/pdfExport.js';
 import { MONTH_OPTIONS, getYearFilterOptions } from '../utils/filterConstants';
+import { useFitColumnsToStatus } from '../utils/tableColumnFit.js';
 import {
   cellStyle,
   thStyle,
@@ -14,7 +16,15 @@ import {
   thActionsStyle,
   tdActionsStyle,
 } from '../components/mc-management/MCManagementShared.jsx';
-import { TransferModal, CloseModal, ActionBtn } from '../components/c-files/CFilesShared.jsx';
+import {
+  COL_WIDTHS,
+  CFILES_COLUMN_SPECS,
+  getUploadUrl,
+  TransferDetailRows,
+  TransferModal,
+  CloseModal,
+  ActionBtn,
+} from '../components/c-files/CFilesShared.jsx';
 window.XLSX = XLSX;
 
 const theme = {
@@ -53,19 +63,6 @@ const btnBase = {
 
 const btnPrimary = { ...btnBase, background: theme.navy, color: '#fff' };
 const btnOutline = { ...btnBase, background: 'transparent', color: theme.text2, border: `1px solid ${theme.border}` };
-
-const COL_WIDTHS = {
-  'FILE NO': 130,
-  'NAME OF THE APARTMENT': 220,
-  'ADDRESS': 220,
-  'DATE': 120,
-  'REASON': 220,
-  'COMPLAINER DETAILS': 200,
-  'REGISTERED CCU FILE NO': 220,
-  'REMARKS': 'auto',
-  'STATUS': 195,
-  'ACTIONS': 210,
-};
 
 const CATEGORIES_BY_SECTION = {
   'A. Administration': [
@@ -640,7 +637,7 @@ function FormModal({ isOpen, onClose, onSave, initialData = null }) {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff', padding: '8px 12px', borderRadius: 6, border: `1px solid ${theme.border}`, marginBottom: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
                   <i className="fas fa-file-alt" style={{ color: theme.blue, fontSize: 16 }} />
-                  <a href={`${(import.meta.env.VITE_API_URL ?? '/api').trim().replace(/\/api\/?$/, '')}/${form.document_path}`} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: theme.blue, textDecoration: 'underline', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <a href={getUploadUrl(form.document_path)} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: theme.blue, textDecoration: 'underline', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {form.document_name || 'View Attached Document'}
                   </a>
                 </div>
@@ -710,6 +707,7 @@ function ViewModal({ isOpen, onClose, record = null, onEdit, onDelete }) {
               {record.status}
             </span>
           } />
+          <TransferDetailRows record={record} />
           <ViewRow label="Date" value={formatDisplayDate(record.date)} />
           <ViewRow label="Category" value={record.category} />
           <ViewRow label="CCU File No" value={record.registered_ccu_file_no} />
@@ -724,7 +722,7 @@ function ViewModal({ isOpen, onClose, record = null, onEdit, onDelete }) {
           <ViewRow label="Remarks" value={record.remarks} />
           <ViewRow label="Attached Document" value={record.document_path ? (
             <a
-              href={`${(import.meta.env.VITE_API_URL ?? '/api').trim().replace(/\/api\/?$/, '')}/${record.document_path}`}
+              href={getUploadUrl(record.document_path)}
               target="_blank"
               rel="noreferrer"
               style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: `${theme.blue}10`, color: theme.blue, borderRadius: 6, textDecoration: 'none', fontWeight: 500, fontSize: 13 }}
@@ -842,6 +840,12 @@ export default function CFiles({ currentUser }) {
   const [showExportModal, setShowExportModal] = useState(false);
   const [exporting, setExporting] = useState(false);
   const confirm = useConfirmDialog();
+  const tableWrapperRef = useRef(null);
+  const { widthsByKey: fittedWidths, totalWidth } = useFitColumnsToStatus(
+    tableWrapperRef,
+    CFILES_COLUMN_SPECS,
+    [cfiles.length, loading, isZoomed, showOnlyPending]
+  );
 
   const pageSize = viewAll ? 999999 : pageSizeDefault;
   const maxPage = Math.max(1, Math.ceil(totalCount / pageSize));
@@ -995,19 +999,30 @@ export default function CFiles({ currentUser }) {
     }
   }
 
-  async function handleTransfer(department) {
+  async function handleTransfer(department, transferOptions = {}) {
+    const remarkText = typeof transferOptions?.remark === 'string' ? transferOptions.remark.trim() : '';
+    const fileObj = transferOptions?.fileObj || null;
     try {
       const API_BASE = (import.meta.env.VITE_API_URL || '/api').trim();
+      const formData = new FormData();
+      formData.append('assigned_department', department);
+      formData.append('user_name', auditUserLabel);
+      formData.append('from_department', currentUser?.department || 'ADMIN');
+      if (remarkText) {
+        formData.append('transfer_remark', remarkText);
+      }
+      if (fileObj) {
+        formData.append('document', fileObj);
+      }
+
       const r = await fetch(`${API_BASE}/cfiles/${actionRecord.id}/transfer`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          assigned_department: department, 
-          user_name: auditUserLabel,
-          from_department: currentUser?.department || 'ADMIN' 
-        }),
+        body: formData,
       });
-      if (!r.ok) throw new Error('Failed to transfer');
+      if (!r.ok) {
+        const errData = await r.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to transfer');
+      }
 
       if (department !== 'CCU') {
         fetch(`${API_BASE}/notifications`, {
@@ -1016,7 +1031,7 @@ export default function CFiles({ currentUser }) {
           body: JSON.stringify({
             type: 'info',
             title: 'C-File Transferred',
-            message: `C-File ${actionRecord.file_no || ''} has been transferred to your department by ${auditUserLabel}.`,
+            message: `C-File ${actionRecord.file_no || ''} has been transferred to your department by ${auditUserLabel}.${remarkText ? ` Remark: ${remarkText}` : ''}`,
             target_role: department,
             link: `cfiles:${actionRecord.id}`
           })
@@ -1549,12 +1564,27 @@ export default function CFiles({ currentUser }) {
         </div>
 
         {/* Table */}
-        <div className="mc-table-wrapper" style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 380px)', minHeight: '200px', overflowY: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed', minWidth: 2600 }}>
+        <div ref={tableWrapperRef} className="mc-table-wrapper" style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 380px)', minHeight: '200px', overflowY: 'auto' }}>
+          <table className="mc-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed', minWidth: totalWidth }}>
+            <colgroup>
+              {Object.keys(COL_WIDTHS).map((label) => (
+                <col key={label} style={{ width: fittedWidths[label] ?? COL_WIDTHS[label] }} />
+              ))}
+            </colgroup>
             <thead>
               <tr>
                 {Object.keys(COL_WIDTHS).map((label) => (
-                  <th key={label} className={label === 'ACTIONS' ? 'mc-th-actions' : label === 'STATUS' ? 'mc-th-status' : ''} style={label === 'ACTIONS' ? { ...thActionsStyle, width: COL_WIDTHS[label] } : label === 'STATUS' ? { ...thStatusStyle, width: COL_WIDTHS[label] } : { ...thStyle, width: COL_WIDTHS[label] }}>
+                  <th
+                    key={label}
+                    className={label === 'ACTIONS' ? 'mc-th-actions' : label === 'STATUS' ? 'mc-th-status' : ''}
+                    style={
+                      label === 'ACTIONS'
+                        ? thActionsStyle
+                        : label === 'STATUS'
+                          ? thStatusStyle
+                          : { ...thStyle, width: fittedWidths[label] ?? COL_WIDTHS[label] }
+                    }
+                  >
                     {label}
                   </th>
                 ))}

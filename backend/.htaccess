@@ -1,10 +1,7 @@
-# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION BEGIN
-PassengerAppRoot "/home/cmauser/public_html/ccu.cma.lk"
-PassengerBaseURI "/"
-PassengerNodejs "/home/cmauser/nodevenv/public_html/ccu.cma.lk/24/bin/node"
-PassengerAppType node
-PassengerStartupFile index.js
-# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION END
+# NOTE: Do NOT hardcode PassengerNodejs here — cPanel's "Setup Node.js App"
+# generates the CLOUDLINUX PASSENGER CONFIGURATION block with the exact
+# server Node.js virtual environment path. Preserve the live .htaccess on cPanel
+# when deploying updates.
 
 # Enable detailed Passenger error messages for troubleshooting
 PassengerFriendlyErrorPages on

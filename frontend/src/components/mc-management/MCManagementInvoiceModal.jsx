@@ -12,6 +12,8 @@ export default function MCManagementInvoiceModal({
   approveRenewalPayment,
   markRenewalPaid,
   markingRenewalPaid,
+  reversePaidYear,
+  reopenRejectedPayment,
   mcs,
   isAGM,
   formatDisplayDate,
@@ -266,7 +268,7 @@ export default function MCManagementInvoiceModal({
                           )}
                         </td>
                         <td style={{ padding: '6px 8px', color: theme.text2, fontSize: 11, whiteSpace: 'nowrap', wordBreak: 'normal' }}>
-                          {invoiceRecord.renewal_payment_status === 'Approved' ? `Approved on ${formatDisplayDate(invoiceRecord.acknowledgement_date)}` : invoiceRecord.renewal_payment_status === 'Rejected' ? `Rejected: ${invoiceRecord.renewal_rejection_reason || '-'}` : invoiceRecord.renewal_payment_status === 'Pending Approval' ? 'AGM will be notified to review' : '-'}
+                          {invoiceRecord.renewal_payment_status === 'Approved' ? `Approved on ${formatDisplayDate(invoiceRecord.acknowledgement_date)}` : invoiceRecord.renewal_payment_status === 'Rejected' ? `Rejected: ${invoiceRecord.approval_note || invoiceRecord.renewal_rejection_reason || 'No reason provided'}` : invoiceRecord.renewal_payment_status === 'Pending Approval' ? 'AGM will be notified to review' : '-'}
                         </td>
                       </tr>
                       <tr>
@@ -301,38 +303,71 @@ export default function MCManagementInvoiceModal({
 
                 // If they have no remaining years, they are effectively fully paid (or no renewal due yet).
                 // We consider them 'Fully Paid' if they don't have remaining years and are not pending approval.
-                const isFullyPaid = (isApproved && !hasRemainingYears) || (isActiveStatus && !hasRemainingYears) || (!hasRemainingYears && !isPendingApproval);
+                const isRejected = invoiceRecord.renewal_payment_status === 'Rejected';
+                const isFullyPaid = (isApproved && !hasRemainingYears) || (isActiveStatus && !hasRemainingYears) || (!hasRemainingYears && !isPendingApproval && !isRejected);
                 const isPartiallyPaid = (isApproved && hasRemainingYears) || (isActiveStatus && hasRemainingYears);
 
                 // Determine background color of status bar
                 const barBg = isFullyPaid ? '#f0fdf4'
                   : isPartiallyPaid ? '#eff6ff'
-                    : isPendingApproval ? '#fffbeb'
-                      : '#fff7ed';
+                    : isRejected ? '#fef2f2'
+                      : isPendingApproval ? '#fffbeb'
+                        : '#fff7ed';
                 const barBorder = isFullyPaid ? theme.green
                   : isPartiallyPaid ? theme.navy
-                    : isPendingApproval ? theme.orange
-                      : theme.orange;
+                    : isRejected ? '#ef4444'
+                      : isPendingApproval ? theme.orange
+                        : theme.orange;
 
                 return (
                   <div style={{ border: `1px solid ${barBorder}`, borderRadius: 10, background: barBg, padding: 14, marginBottom: 4 }}>
                     {/* Top row: status text + primary action button */}
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
                       <div>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: isFullyPaid ? theme.green : isPartiallyPaid ? theme.navy : isPendingApproval ? theme.orange : theme.orange }}>
-                          <i className={`fas ${isFullyPaid ? 'fa-check-circle' : isPartiallyPaid ? 'fa-check-circle' : isPendingApproval ? 'fa-hourglass-half' : 'fa-clock'}`} style={{ marginRight: 6 }} />
+                        <div style={{ fontSize: 12, fontWeight: 700, color: isFullyPaid ? theme.green : isPartiallyPaid ? theme.navy : isRejected ? '#dc2626' : isPendingApproval ? theme.orange : theme.orange }}>
+                          <i className={`fas ${isFullyPaid ? 'fa-check-circle' : isPartiallyPaid ? 'fa-check-circle' : isRejected ? 'fa-times-circle' : isPendingApproval ? 'fa-hourglass-half' : 'fa-clock'}`} style={{ marginRight: 6 }} />
                           {isFullyPaid ? 'Renewal Fee Paid & Approved'
                             : isPartiallyPaid ? 'Partially Paid & Approved — Remaining years pending'
-                              : isPendingApproval ? 'Payment Pending AGM Approval'
-                                : 'Renewal Fee Not Yet Paid'}
+                              : isRejected ? 'Payment Rejected by AGM'
+                                : isPendingApproval ? 'Payment Pending AGM Approval'
+                                  : 'Renewal Fee Not Yet Paid'}
                         </div>
-                        {(isApproved || isActiveStatus) && (
+                        {(isApproved || isActiveStatus || isFullyPaid) && (
                           <div style={{ fontSize: 11.5, color: theme.text2, marginTop: 4 }}>
                             Paid on {formatDisplayDate(invoiceRecord.renewal_paid_date) || '-'} - Acknowledgement No: {invoiceRecord.acknowledgement_no || '-'}
                             {isPartiallyPaid && (
                               <span style={{ marginLeft: 8, color: theme.navy, fontWeight: 600 }}>
                                 (Covers: {invoiceRecord.renewal_last_paid_years || invoiceRecord.renewal_paid_years || invoiceRecord.renewal_paid_year || '-'})
                               </span>
+                            )}
+                          </div>
+                        )}
+                        {isRejected && (
+                          <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                            <div style={{ fontSize: 11.5, color: '#dc2626' }}>
+                              Reason: {invoiceRecord.approval_note || invoiceRecord.renewal_rejection_reason || 'No reason provided'}
+                            </div>
+                            {reopenRejectedPayment && (
+                              <button
+                                onClick={() => reopenRejectedPayment(invoiceRecord)}
+                                disabled={markingRenewalPaid}
+                                style={{
+                                  background: '#dc2626',
+                                  color: '#fff',
+                                  border: 'none',
+                                  padding: '5px 12px',
+                                  borderRadius: 6,
+                                  fontSize: 11.5,
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 5
+                                }}
+                                title="Revert rejected payment and reopen years so they can be marked as paid again"
+                              >
+                                <i className="fas fa-undo" /> Reopen Years to Mark as Paid
+                              </button>
                             )}
                           </div>
                         )}
@@ -356,10 +391,10 @@ export default function MCManagementInvoiceModal({
                           </button>
                         )}
                         {/* Awaiting approval indicator for non-AGM */}
-                        {isPendingApproval && !isAGM && (
+                        {(isPendingApproval || isRejected) && !isAGM && (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
-                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '8px 14px', fontSize: 12.5, fontWeight: 700, color: '#c2410c' }}>
-                              <i className="fas fa-hourglass-half" /> Awaiting AGM Approval
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: isRejected ? '#fef2f2' : '#fff7ed', border: isRejected ? '1px solid #fca5a5' : '1px solid #fed7aa', borderRadius: 8, padding: '8px 14px', fontSize: 12.5, fontWeight: 700, color: isRejected ? '#b91c1c' : '#c2410c' }}>
+                              <i className={`fas ${isRejected ? 'fa-times-circle' : 'fa-hourglass-half'}`} /> {isRejected ? 'Payment Rejected' : 'Awaiting AGM Approval'}
                             </div>
                             <div style={{ fontSize: 11, color: theme.text3 }}>The AGM has been notified. You will receive a notification once approved.</div>
                           </div>
@@ -368,111 +403,130 @@ export default function MCManagementInvoiceModal({
                     </div>
 
                     {/* Mark remaining years as paid / Show paid years */}
-                    <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${isPartiallyPaid || isFullyPaid ? '#bfdbfe' : theme.border}` }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: theme.navy, marginBottom: 8 }}>
-                        <i className="fas fa-calendar-plus" style={{ marginRight: 6 }} />
-                        {!hasRemainingYears ? 'Paid Years:' : isPartiallyPaid ? 'Mark Remaining Years as Paid:' : 'Select Years to Mark as Paid:'}
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', flexWrap: 'wrap' }}>
-                        {(() => {
-                          const unpaidYears = invoiceRecord._multiYearRows ? invoiceRecord._multiYearRows.map(r => r.year) : [];
+                    {(isRejected || isPartiallyPaid || isFullyPaid || isActiveStatus || (!isApproved && !isPendingApproval)) && (
+                      <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${isPartiallyPaid || isFullyPaid || isActiveStatus ? '#bfdbfe' : theme.border}` }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: theme.navy, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
+                          <span>
+                            <i className="fas fa-calendar-plus" style={{ marginRight: 6 }} />
+                            {isRejected ? 'Years (Payment Rejected - Select to Mark as Paid):' : !hasRemainingYears ? 'Paid Years:' : isPartiallyPaid ? 'Mark Remaining Years as Paid:' : 'Select Years to Mark as Paid:'}
+                          </span>
+                          <span style={{ fontSize: 10.5, fontWeight: 500, color: theme.text3 }}>
+                            Tip: Click any paid year (✓) to reverse it
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', flexWrap: 'wrap' }}>
+                          {(() => {
+                            const unpaidYears = invoiceRecord._multiYearRows ? invoiceRecord._multiYearRows.map(r => r.year) : [];
 
-                          let lastPaidYear = null;
-                          if (invoiceRecord.renewal_period) {
-                            const match = String(invoiceRecord.renewal_period).match(/\b(19|20)\d{2}\b/g);
-                            if (match) lastPaidYear = parseInt(match[match.length - 1], 10);
-                            else lastPaidYear = parseInt(invoiceRecord.renewal_period, 10);
-                          }
-                          if (!lastPaidYear && invoiceRecord.renewal_paid_year) {
-                            lastPaidYear = parseInt(invoiceRecord.renewal_paid_year, 10);
-                          }
+                            let lastApprovedYear = null;
+                            if (invoiceRecord.acknowledgement_no) {
+                              const ackMatch = String(invoiceRecord.acknowledgement_no).match(/\b(19|20)\d{2}\b/g);
+                              if (ackMatch && ackMatch.length > 0) lastApprovedYear = parseInt(ackMatch[ackMatch.length - 1], 10);
+                            }
 
-                          // If still no explicitly recorded paid year, but the invoice is considered fully paid (or Active), 
-                          // assume the last paid year is the current year.
-                          if (!lastPaidYear && (isFullyPaid || String(invoiceRecord.status || '').toLowerCase() === 'active')) {
-                            lastPaidYear = new Date().getFullYear();
-                          }
+                            let lastPaidYear = null;
+                            if (invoiceRecord.renewal_period) {
+                              const match = String(invoiceRecord.renewal_period).match(/\b(19|20)\d{2}\b/g);
+                              if (match) lastPaidYear = parseInt(match[match.length - 1], 10);
+                              else lastPaidYear = parseInt(invoiceRecord.renewal_period, 10);
+                            }
+                            if (!lastPaidYear && invoiceRecord.renewal_paid_year) {
+                              lastPaidYear = parseInt(invoiceRecord.renewal_paid_year, 10);
+                            }
 
-                          const allYears = new Set([...unpaidYears]);
-                          if (lastPaidYear && !unpaidYears.includes(lastPaidYear)) {
-                            allYears.add(lastPaidYear);
-                          }
+                            // If still no explicitly recorded paid year, but the invoice is considered fully paid (or Active), 
+                            // assume the last paid year is the current year.
+                            if (!lastPaidYear && (isFullyPaid || String(invoiceRecord.status || '').toLowerCase() === 'active')) {
+                              lastPaidYear = new Date().getFullYear();
+                            }
 
-                          // Add the next 2 years for advance payment selection
-                          const maxCurrentYear = Math.max(lastPaidYear || new Date().getFullYear(), ...unpaidYears, new Date().getFullYear());
-                          allYears.add(maxCurrentYear + 1);
-                          allYears.add(maxCurrentYear + 2);
+                            const allYears = new Set([...unpaidYears]);
+                            if (lastPaidYear && !unpaidYears.includes(lastPaidYear)) {
+                              allYears.add(lastPaidYear);
+                            }
 
-                          const paidYearsStr = invoiceRecord.renewal_paid_years || String(invoiceRecord.renewal_paid_year || '');
-                          const paidYearsList = paidYearsStr.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y));
-                          paidYearsList.forEach(y => allYears.add(y));
+                            // Add the next 2 years for advance payment selection
+                            const maxCurrentYear = Math.max(lastPaidYear || new Date().getFullYear(), ...unpaidYears, new Date().getFullYear());
+                            allYears.add(maxCurrentYear + 1);
+                            allYears.add(maxCurrentYear + 2);
 
-                          const sortedYears = Array.from(allYears).sort((a, b) => a - b);
+                            const paidYearsStr = invoiceRecord.renewal_paid_years || String(invoiceRecord.renewal_paid_year || '');
+                            const paidYearsList = paidYearsStr.split(',').map(y => parseInt(y.trim(), 10)).filter(y => !isNaN(y));
+                            paidYearsList.forEach(y => allYears.add(y));
 
-                          if (sortedYears.length === 0) return <span style={{ fontSize: 11, color: theme.text3, fontWeight: 600 }}>No years to display</span>;
+                            const sortedYears = Array.from(allYears).sort((a, b) => a - b);
 
-                          return (
-                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                              {sortedYears.map(y => {
-                                const isAlreadyPaid = paidYearsList.includes(y) || (lastPaidYear && y <= lastPaidYear && !unpaidYears.includes(y));
-                                const isSel = selectedRenewalYears.includes(y);
+                            if (sortedYears.length === 0) return <span style={{ fontSize: 11, color: theme.text3, fontWeight: 600 }}>No years to display</span>;
 
-                                if (isAlreadyPaid) {
+                            return (
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                {sortedYears.map(y => {
+                                  const isAlreadyPaid = (isRejected && (!lastApprovedYear || y > lastApprovedYear))
+                                    ? false
+                                    : (paidYearsList.includes(y) || (lastPaidYear && y <= lastPaidYear && !unpaidYears.includes(y)));
+                                  const isSel = selectedRenewalYears.includes(y);
+
+                                  if (isAlreadyPaid) {
+                                    return (
+                                      <button
+                                        key={y}
+                                        type="button"
+                                        onClick={() => reversePaidYear && reversePaidYear(invoiceRecord, y)}
+                                        title={`Paid Year ${y}. Click to reverse/unpay this year.`}
+                                        style={{
+                                          padding: '4px 10px',
+                                          borderRadius: 6,
+                                          border: `1px solid ${theme.green}`,
+                                          background: '#f0fdf4',
+                                          color: theme.green,
+                                          fontSize: 11,
+                                          fontWeight: 700,
+                                          cursor: reversePaidYear ? 'pointer' : 'default',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: 4
+                                        }}
+                                      >
+                                        <i className="fas fa-check" /> {y}
+                                        {reversePaidYear && <i className="fas fa-undo-alt" style={{ fontSize: 9.5, opacity: 0.65, color: '#dc2626', marginLeft: 2 }} title={`Reverse year ${y}`} />}
+                                      </button>
+                                    );
+                                  }
+
                                   return (
                                     <button
                                       key={y}
-                                      disabled
+                                      type="button"
+                                      onClick={() => setSelectedRenewalYears(prev => isSel ? prev.filter(x => x !== y) : [...prev, y])}
                                       style={{
                                         padding: '4px 10px',
                                         borderRadius: 6,
-                                        border: `1px solid ${theme.green}`,
-                                        background: '#f0fdf4',
-                                        color: theme.green,
+                                        border: `1px solid ${isSel ? theme.navy : theme.border}`,
+                                        background: isSel ? theme.navy : '#fff',
+                                        color: isSel ? '#fff' : theme.text,
                                         fontSize: 11,
-                                        fontWeight: 700,
-                                        cursor: 'not-allowed',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: 4
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s'
                                       }}
                                     >
-                                      <i className="fas fa-check" /> {y}
+                                      {y}
                                     </button>
                                   );
-                                }
-
-                                return (
-                                  <button
-                                    key={y}
-                                    onClick={() => setSelectedRenewalYears(prev => isSel ? prev.filter(x => x !== y) : [...prev, y])}
-                                    style={{
-                                      padding: '4px 10px',
-                                      borderRadius: 6,
-                                      border: `1px solid ${isSel ? theme.navy : theme.border}`,
-                                      background: isSel ? theme.navy : '#fff',
-                                      color: isSel ? '#fff' : theme.text,
-                                      fontSize: 11,
-                                      fontWeight: 600,
-                                      cursor: 'pointer',
-                                      transition: 'all 0.15s'
-                                    }}
-                                  >
-                                    {y}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          );
-                        })()}
-                      </div>
-                      {hasRemainingYears && (
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
-                          <button onClick={() => markRenewalPaid(invoiceRecord)} disabled={markingRenewalPaid || selectedRenewalYears.length === 0} className="mc-btn-primary" style={{ background: '#f59e0b', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, opacity: (markingRenewalPaid || selectedRenewalYears.length === 0) ? 0.6 : 1, cursor: (markingRenewalPaid || selectedRenewalYears.length === 0) ? 'not-allowed' : 'pointer' }}>
-                            {markingRenewalPaid ? <><i className="fas fa-spinner fa-spin" /> Saving...</> : <><i className="fas fa-hand-holding-usd" /> Mark as Paid</>}
-                          </button>
+                                })}
+                              </div>
+                            );
+                          })()}
                         </div>
-                      )}
-                    </div>
+                        {(hasRemainingYears || isRejected || selectedRenewalYears.length > 0) && (
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
+                            <button onClick={() => markRenewalPaid(invoiceRecord)} disabled={markingRenewalPaid || selectedRenewalYears.length === 0} className="mc-btn-primary" style={{ background: '#f59e0b', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, opacity: (markingRenewalPaid || selectedRenewalYears.length === 0) ? 0.6 : 1, cursor: (markingRenewalPaid || selectedRenewalYears.length === 0) ? 'not-allowed' : 'pointer' }}>
+                              {markingRenewalPaid ? <><i className="fas fa-spinner fa-spin" /> Saving...</> : <><i className="fas fa-hand-holding-usd" /> Mark as Paid</>}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })()}

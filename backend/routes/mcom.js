@@ -24,6 +24,7 @@ const { mergeImportPayload } = require('../utils/importMerge');
 
 // Destructure the model once — cleaner than re-fetching in every handler
 const { McomRecord } = db.models;
+const { buildFileNoSearchCondition } = require('../utils/fileNoSearch');
 
 // ── Helper: Allowed writable columns ────────────────────────────────────────
 // Whitelist of columns that can be written. Protects against mass-assignment.
@@ -44,6 +45,7 @@ const WRITABLE_COLS = [
 
   // Renewal payment / acknowledgement fields
   'renewal_paid', 'renewal_paid_date', 'renewal_paid_amount', 'renewal_paid_year', 'renewal_paid_years',
+  'renewal_last_paid_years', 'renewal_rejection_reason',
   'renewal_receipt_no', 'acknowledgement_no', 'acknowledgement_date', 'renewal_payment_status', 'next_renewal_date'
 ];
 
@@ -202,8 +204,20 @@ function getMcomEffectiveStatus(r) {
 function deriveMcomFields(data) {
   const currentYear = new Date().getFullYear();
 
-  // 1. Derive / normalize renewal_date_vise
-  if (data.renewal_date_vise) {
+  // 1. Derive / normalize renewal_date_vise & status based on renewal_period
+  let rpYear = null;
+  if (data.renewal_period) {
+    const rpMatches = String(data.renewal_period).match(/\b(19|20)\d{2}\b/g);
+    rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(data.renewal_period, 10);
+  }
+
+  if (rpYear && !isNaN(rpYear)) {
+    // If renewal_period year is less than current year, it MUST be Non Active unless pending approval
+    data.renewal_date_vise = rpYear >= currentYear ? 'Active' : 'Non Active';
+    if (rpYear < currentYear && data.status !== 'Pending') {
+      data.status = 'Non Active';
+    }
+  } else if (data.renewal_date_vise) {
     const rawLower = String(data.renewal_date_vise).toLowerCase().trim();
     if (rawLower.includes('non') || rawLower.includes('inactive')) {
       data.renewal_date_vise = 'Non Active';
@@ -211,16 +225,8 @@ function deriveMcomFields(data) {
       data.renewal_date_vise = 'Active';
     }
   } else {
-    if (data.renewal_payment_status === 'Approved') {
-      data.renewal_date_vise = 'Active';
-    } else if (data.renewal_payment_status === 'Pending Approval') {
+    if (data.renewal_payment_status === 'Pending Approval') {
       data.renewal_date_vise = 'Non Active';
-    } else if (data.renewal_period) {
-      const rpMatches = String(data.renewal_period).match(/\b(19|20)\d{2}\b/g);
-      const rpYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(data.renewal_period, 10);
-      if (!isNaN(rpYear)) {
-        data.renewal_date_vise = rpYear >= currentYear ? 'Active' : 'Non Active';
-      }
     } else if (data.status === 'Active' || data.active_non_active === 'Active') {
       data.renewal_date_vise = 'Active';
     }
@@ -283,9 +289,9 @@ router.get('/', async (req, res) => {
     // SQLite's LIKE is already case-insensitive for ASCII letters.
     let cleanQ = q;
     if (q) {
-      // If user types "MCOM-1092" based on placeholder, strip "MCOM-" to search effectively
-      cleanQ = q.replace(/^MCOM\s*-?\s*/i, '').replace(/^MC\s*-?\s*/i, '');
-      
+      // If user types "MCOM-1092" or "M.com/833", strip prefix to search effectively
+      cleanQ = q.replace(/^M\.?\s*COM\s*[-/. ]\s*/i, '').replace(/^MC\s*[-/. ]\s*/i, '');
+
       if (searchField === 'planNo') {
         andConditions.push({
           $or: [
@@ -306,22 +312,8 @@ router.get('/', async (req, res) => {
           ]
         });
       } else {
-        andConditions.push({
-          $or: [
-            { file_no: { $like: `%${cleanQ}%` } },
-            { new_file_no: { $like: `%${cleanQ}%` } },
-            { old_file_no: { $like: `%${cleanQ}%` } },
-            { plan_no: { $like: `%${cleanQ}%` } },
-            { management_corporation_name: { $like: `%${cleanQ}%` } },
-            { address: { $like: `%${cleanQ}%` } },
-            { secretary: { $like: `%${cleanQ}%` } },
-            { treasurer: { $like: `%${cleanQ}%` } },
-            { town: { $like: `%${cleanQ}%` } },
-            { remark: { $like: `%${cleanQ}%` } },
-            { certificate_file_no: { $like: `%${cleanQ}%` } },
-            { email_address: { $like: `%${cleanQ}%` } },
-          ]
-        });
+        const searchCond = buildFileNoSearchCondition(q, ['remark', 'certificate_file_no', 'email_address']);
+        if (searchCond) andConditions.push(searchCond);
       }
     }
 

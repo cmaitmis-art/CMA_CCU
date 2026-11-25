@@ -28,16 +28,26 @@ try {
     Pop-Location
 }
 
-# 3. Copy Backend files
+# 3. Copy Backend files (exclude .htaccess so live cPanel Passenger config is preserved)
 Write-Host "`n3. Copying backend files to staging..." -ForegroundColor Yellow
-robocopy "$backendDir" "$stagingDir" /E /XD node_modules .git /XF *.zip
+robocopy "$backendDir" "$stagingDir" /E /XD node_modules .git /XF *.zip .htaccess
 if ($LASTEXITCODE -ge 8) { throw "Robocopy backend failed with code $LASTEXITCODE" }
+
+$htaccessTemplate = Join-Path $backendDir ".htaccess"
+if (Test-Path $htaccessTemplate) {
+    Copy-Item -Path $htaccessTemplate -Destination (Join-Path $stagingDir ".htaccess.template") -Force
+}
 
 # Ensure uploads directory structure exists
 $subUploads = @("agm", "avatars", "cfiles", "complaints", "reports")
 foreach ($sub in $subUploads) {
     New-Item -ItemType Directory -Force -Path (Join-Path $stagingDir "uploads\$sub") | Out-Null
 }
+
+# Ensure tmp/restart.txt exists so Passenger auto-restarts upon extraction
+$tmpDir = Join-Path $stagingDir "tmp"
+New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+Set-Content -Path (Join-Path $tmpDir "restart.txt") -Value (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
 
 # 4. Copy Frontend dist to public/ and root
 Write-Host "`n4. Copying frontend build into staging public and root folders..." -ForegroundColor Yellow

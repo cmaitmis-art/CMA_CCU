@@ -135,6 +135,7 @@ export default function Profile({ currentUser, onUserUpdated }) {
                   roleKey === 'ADMIN' ? 'CMA — IT / System Division' :
                   roleKey === 'TECHNICAL' ? 'CMA — Technical Division' :
                   roleKey === 'LEGAL' ? 'CMA — Legal Division' :
+                  roleKey === 'FINANCE' ? 'CMA — Finance Division' :
                   'CMA — CCU Division'),
       year: currentUser?.year || '2026',
       timeline: timelineItems.length > 0 ? timelineItems : [

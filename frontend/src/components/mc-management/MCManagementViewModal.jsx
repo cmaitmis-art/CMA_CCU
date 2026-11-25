@@ -208,15 +208,16 @@ export default function MCManagementViewModal({
               {/* Renewal Date Vise - computed based on renewal_period vs current year */}
               {(() => {
                 const currentYear = new Date().getFullYear();
-                const renewalPeriodYear = parseInt(viewRecord.renewal_period, 10);
+                const rpMatches = String(viewRecord.renewal_period || '').match(/\b(19|20)\d{2}\b/g);
+                const renewalPeriodYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(viewRecord.renewal_period, 10);
                 const rawVise = String(viewRecord.renewal_date_vise || '').trim().toLowerCase();
                 const paymentStatus = viewRecord.renewal_payment_status;
                 let effectiveVise;
                 if (paymentStatus === 'Pending Approval') effectiveVise = 'Pending';
+                else if (!isNaN(renewalPeriodYear)) effectiveVise = renewalPeriodYear >= currentYear ? 'Active' : 'Non Active';
                 else if (rawVise === 'non active' || rawVise === 'nonactive') effectiveVise = 'Non Active';
-                else if (paymentStatus === 'Approved') effectiveVise = 'Active';
-                else if (renewalPeriodYear && renewalPeriodYear >= currentYear) effectiveVise = 'Active';
-                else if (renewalPeriodYear && renewalPeriodYear < currentYear) effectiveVise = 'Non Active';
+                else if (rawVise === 'active') effectiveVise = 'Active';
+                else if (String(viewRecord.status || '').toLowerCase() === 'active') effectiveVise = 'Active';
                 else effectiveVise = viewRecord.renewal_date_vise || '-';
 
                 const isActive = effectiveVise === 'Active';

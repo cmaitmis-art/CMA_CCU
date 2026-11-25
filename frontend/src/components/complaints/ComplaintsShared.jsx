@@ -110,7 +110,7 @@ const tableStyle = {
   fontSize: 12,
   fontFamily: "'Inter', 'Noto Sans Sinhala', 'Gemunu Libre', 'Iskoola Pota', 'Segoe UI', sans-serif",
   tableLayout: 'fixed',
-  minWidth: 1645,
+  minWidth: 1615,
 };
 
 const thStyle = {
@@ -135,9 +135,13 @@ const thActionsStyle = {
   position: 'sticky',
   top: 0,
   right: 0,
-  zIndex: 3,
+  width: 210,
+  minWidth: 210,
+  maxWidth: 210,
+  zIndex: 30,
   background: '#f8fafc',
-  borderLeft: `1px solid ${theme.border}`,
+  borderLeft: '1px solid #cbd5e1',
+  backgroundClip: 'padding-box',
 };
 
 const tdActionsStyle = {
@@ -147,9 +151,13 @@ const tdActionsStyle = {
   overflow: 'visible',
   position: 'sticky',
   right: 0,
-  zIndex: 1,
+  width: 210,
+  minWidth: 210,
+  maxWidth: 210,
+  zIndex: 10,
   background: '#ffffff',
-  borderLeft: `1px solid ${theme.border}`,
+  borderLeft: '1px solid #e2e8f0',
+  backgroundClip: 'padding-box',
 };
 
 const STATUS_COL_RIGHT_OFFSET = 210; // must match COL_WIDTHS.ACTIONS below
@@ -167,8 +175,12 @@ const thStatusStyle = {
   ...thStyle,
   position: 'sticky',
   right: STATUS_COL_RIGHT_OFFSET,
+  width: 195,
+  minWidth: 195,
+  maxWidth: 195,
   zIndex: 30,
-  borderLeft: `1px solid ${theme.border}`,
+  borderLeft: '1px solid #cbd5e1',
+  backgroundClip: 'padding-box',
 };
 
 const cellStyle = {
@@ -192,19 +204,34 @@ const tdCheckStyle = {
 // (Serial No, Letter date, Received CCU, MC No., Apartment Name, Complaint Name,
 // Issue/Heading, File, T/R, Reply) plus Status/Actions for workflow tracking.
 const COL_WIDTHS = {
-  'SERIAL NO': 130,
-  'LETTER DATE': 110,
-  'RECEIVED CCU': 110,
-  'MC NO': 100,
-  'APARTMENT NAME': 200,
+  'SERIAL NO': 120,
+  'LETTER DATE': 105,
+  'RECEIVED CCU': 105,
+  'MC NO': 95,
+  'APARTMENT NAME': 195,
   'COMPLAINT NAME': 160,
-  'ISSUE / HEADING': 'auto',
+  'ISSUE / HEADING': 220,
   'FILE': 70,
   'T/R': 70,
   'REPLY': 70,
   'STATUS': 195,
-  'ACTIONS': 260,
+  'ACTIONS': 210,
 };
+
+const COMPLAINTS_COLUMN_SPECS = [
+  { key: 'SERIAL NO', width: 120, minWidth: 100, flex: 1 },
+  { key: 'LETTER DATE', width: 105, minWidth: 92, flex: 0.5 },
+  { key: 'RECEIVED CCU', width: 105, minWidth: 92, flex: 0.5 },
+  { key: 'MC NO', width: 95, minWidth: 85, flex: 0.5 },
+  { key: 'APARTMENT NAME', width: 195, minWidth: 150, flex: 3 },
+  { key: 'COMPLAINT NAME', width: 160, minWidth: 130, flex: 2 },
+  { key: 'ISSUE / HEADING', width: 220, minWidth: 160, flex: 3, isFlexible: true },
+  { key: 'FILE', width: 70, minWidth: 60, flex: 0.2 },
+  { key: 'T/R', width: 70, minWidth: 60, flex: 0.2 },
+  { key: 'REPLY', width: 70, minWidth: 60, flex: 0.2 },
+  { key: 'STATUS', width: 195, minWidth: 195, maxWidth: 195, flex: 0 },
+  { key: 'ACTIONS', width: 210, minWidth: 210, maxWidth: 210, flex: 0 },
+];
 
 const CATEGORIES_BY_SECTION = {
   'A. Administration': [
@@ -969,6 +996,7 @@ export {
   cellStyle,
   tdCheckStyle,
   COL_WIDTHS,
+  COMPLAINTS_COLUMN_SPECS,
   CATEGORIES_BY_SECTION,
   ALL_CATEGORIES,
   STATUS_OPTIONS,

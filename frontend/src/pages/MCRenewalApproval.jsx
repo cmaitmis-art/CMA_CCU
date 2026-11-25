@@ -49,6 +49,7 @@ import { ViewField, SectionLabel, overlayStyle, modalStyle, modalHeader, closeBt
 import '../components/mc-management/MCManagement.css';
 import { CMA_LOGO_BASE64 } from '../utils/logoBase64.js';
 import { LETTERHEAD_BASE64 } from '../utils/letterHeadBase64.js';
+import { useFitColumnsToStatus } from '../utils/tableColumnFit.js';
 
 
 const approvalApi = {
@@ -78,6 +79,21 @@ const solidBtn = (color) => ({
   background: color, color: '#fff',
 });
 
+export const STATUS_COL_WIDTH = 155;
+export const ACTION_COL_WIDTH = 195;
+
+export const RENEWAL_COLUMN_SPECS = [
+  { key: 'Reference No', width: 95, minWidth: 82, maxWidth: 120, flex: 0.4 },
+  { key: 'MC / M.Com', width: 215, minWidth: 155, maxWidth: 320, flex: 1.5, isFlexible: true },
+  { key: 'Applicant', width: 175, minWidth: 135, maxWidth: 260, flex: 1.2 },
+  { key: 'Years', width: 70, minWidth: 60, maxWidth: 110, flex: 0.4 },
+  { key: 'Amount', width: 115, minWidth: 95, maxWidth: 150, flex: 0.6 },
+  { key: 'Submitted', width: 155, minWidth: 135, maxWidth: 200, flex: 0.8 },
+  { key: 'Action By', width: 100, minWidth: 80, maxWidth: 150, flex: 0.5 },
+  { key: 'Status', width: STATUS_COL_WIDTH, minWidth: STATUS_COL_WIDTH, maxWidth: STATUS_COL_WIDTH },
+  { key: 'Action', width: ACTION_COL_WIDTH, minWidth: ACTION_COL_WIDTH, maxWidth: ACTION_COL_WIDTH },
+];
+
 const STATUS_STYLES = {
   pending_approval: { bg: theme.amberBg, color: theme.amber, label: 'Pending Approval' },
   active: { bg: theme.greenBg, color: theme.green, label: 'Active' },
@@ -87,14 +103,14 @@ const STATUS_STYLES = {
 function StatusPill({ status }) {
   const s = STATUS_STYLES[status] || STATUS_STYLES.pending_approval;
   return (
-    <span style={{ background: s.bg, color: s.color, padding: '3px 12px', borderRadius: 999, fontSize: 11.5, fontWeight: 700 }}>
+    <span style={{ background: s.bg, color: s.color, padding: '3px 12px', borderRadius: 999, fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap' }}>
       {s.label}
     </span>
   );
 }
 
 export default function MCRenewalApproval({ currentUser }) {
-  const isAdmin = String(currentUser?.role || '').trim().toLowerCase() === 'admin';
+  const isAdmin = String(currentUser?.role || '').trim().toLowerCase() === 'admin' || Boolean(currentUser?.isSuperAdmin);
   const canEdit = hasPermission(currentUser, 'renewal_approval', 'edit');
   const canDelete = hasPermission(currentUser, 'renewal_approval', 'delete');
   const canCreate = hasPermission(currentUser, 'renewal_approval', 'create');
@@ -720,6 +736,13 @@ body { font-family: Arial, Helvetica, sans-serif; background: #fff; color: #1a1a
   }, [tab]);
 
   const paginatedRows = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const tableWrapperRef = useRef(null);
+  const { widthsByKey: fittedWidths, totalWidth } = useFitColumnsToStatus(
+    tableWrapperRef,
+    RENEWAL_COLUMN_SPECS,
+    [paginatedRows.length, loading, isZoomed, tab],
+    STATUS_COL_WIDTH + ACTION_COL_WIDTH
+  );
 
   async function handleApprove() {
     if (!selected) return;
@@ -910,17 +933,24 @@ body { font-family: Arial, Helvetica, sans-serif; background: #fff; color: #1a1a
           </div>
 
           {/* Table */}
-          <div style={{ background: theme.card, overflowX: 'auto', maxHeight: 'calc(100vh - 340px)', minHeight: '200px', position: 'relative', borderBottom: `1px solid ${theme.border}`, borderRadius: '0 0 8px 8px' }}>
-            <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: 13, minWidth: 1000 }}>
+          <div ref={tableWrapperRef} style={{ background: theme.card, overflowX: 'auto', maxHeight: 'calc(100vh - 340px)', minHeight: '200px', position: 'relative', borderBottom: `1px solid ${theme.border}`, borderRadius: '0 0 8px 8px' }}>
+            <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: 13, tableLayout: 'fixed', minWidth: totalWidth }}>
+              <colgroup>
+                {RENEWAL_COLUMN_SPECS.map((col) => (
+                  <col key={col.key} style={{ width: fittedWidths[col.key] ?? col.width }} />
+                ))}
+              </colgroup>
               <thead>
                 <tr style={{ background: '#fafbfc' }}>
-                  {['Reference No', 'MC / M.Com', 'Applicant', 'Years', 'Amount', 'Submitted', 'Action By', 'Status', 'Action'].map((h, i) => {
+                  {RENEWAL_COLUMN_SPECS.map((col, i) => {
+                    const h = col.key;
                     const isStatus = h === 'Status';
                     const isAction = h === 'Action';
+                    const colWidth = fittedWidths[h] ?? col.width;
 
                     let thStyle = {
                       textAlign: 'left',
-                      padding: '12px 16px',
+                      padding: '12px 10px',
                       fontSize: 11.5,
                       color: theme.text2,
                       textTransform: 'uppercase',
@@ -928,10 +958,10 @@ body { font-family: Arial, Helvetica, sans-serif; background: #fff; color: #1a1a
                       borderBottom: `1px solid ${theme.border}`,
                       background: '#fafbfc',
                       position: (isStatus || isAction) ? 'sticky' : 'static',
-                      right: isAction ? 0 : (isStatus ? 120 : 'auto'),
-                      width: isAction ? 120 : (isStatus ? 140 : 'auto'),
-                      minWidth: isAction ? 120 : (isStatus ? 140 : 'auto'),
-                      maxWidth: isAction ? 120 : (isStatus ? 140 : 'auto'),
+                      right: isAction ? 0 : (isStatus ? ACTION_COL_WIDTH : 'auto'),
+                      width: isAction ? ACTION_COL_WIDTH : (isStatus ? STATUS_COL_WIDTH : colWidth),
+                      minWidth: isAction ? ACTION_COL_WIDTH : (isStatus ? STATUS_COL_WIDTH : undefined),
+                      maxWidth: isAction ? ACTION_COL_WIDTH : (isStatus ? STATUS_COL_WIDTH : undefined),
                       zIndex: (isStatus || isAction) ? 30 : 10,
                     };
                     if (isStatus || isAction) {
@@ -940,7 +970,7 @@ body { font-family: Arial, Helvetica, sans-serif; background: #fff; color: #1a1a
                     }
 
                     return (
-                      <th key={i} style={thStyle}>
+                      <th key={i} data-status-col={isStatus ? 'true' : undefined} style={thStyle}>
                         {h}
                       </th>
                     );
@@ -976,46 +1006,46 @@ body { font-family: Arial, Helvetica, sans-serif; background: #fff; color: #1a1a
                       transition: 'background 0.15s ease'
                     }}
                   >
-                    <td style={{ padding: '12px 16px', fontFamily: fontMono, color: theme.navy, fontWeight: 700, borderBottom: `1px solid ${theme.border}` }}>{r.ref_no}</td>
-                    <td style={{ padding: '12px 16px', borderBottom: `1px solid ${theme.border}` }}>
-                      <div style={{ fontWeight: 600 }}>{r.mc_name}</div>
-                      <div style={{ fontSize: 11.5, color: theme.text3, fontFamily: fontMono }}>{r.plan_no}</div>
+                    <td style={{ padding: '12px 10px', fontFamily: fontMono, color: theme.navy, fontWeight: 700, borderBottom: `1px solid ${theme.border}` }}>{r.ref_no}</td>
+                    <td style={{ padding: '12px 10px', borderBottom: `1px solid ${theme.border}` }} title={r.mc_name}>
+                      <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.mc_name}</div>
+                      <div style={{ fontSize: 11.5, color: theme.text3, fontFamily: fontMono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.plan_no}</div>
                     </td>
-                    <td style={{ padding: '12px 16px', borderBottom: `1px solid ${theme.border}` }}>
-                      <div>{r.applicant_name}</div>
-                      <div style={{ fontSize: 11.5, color: theme.text3 }}>{r.applicant_phone}</div>
+                    <td style={{ padding: '12px 10px', borderBottom: `1px solid ${theme.border}` }} title={r.applicant_name}>
+                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.applicant_name}</div>
+                      <div style={{ fontSize: 11.5, color: theme.text3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.applicant_phone}</div>
                     </td>
-                    <td style={{ padding: '12px 16px', fontFamily: fontMono, borderBottom: `1px solid ${theme.border}` }}>{r.years?.join(', ')}</td>
-                    <td style={{ padding: '12px 16px', fontFamily: fontMono, fontWeight: 700, borderBottom: `1px solid ${theme.border}` }}>{money(r.amount)}</td>
-                    <td style={{ padding: '12px 16px', fontSize: 12, color: theme.text2, borderBottom: `1px solid ${theme.border}` }}>{new Date(r.created_at).toLocaleString('en-LK')}</td>
-                    <td style={{ padding: '12px 16px', fontSize: 12, color: theme.text2, borderBottom: `1px solid ${theme.border}` }}>{r.action_by || '-'}</td>
+                    <td style={{ padding: '12px 10px', fontFamily: fontMono, borderBottom: `1px solid ${theme.border}` }}>{r.years?.join(', ')}</td>
+                    <td style={{ padding: '12px 10px', fontFamily: fontMono, fontWeight: 700, borderBottom: `1px solid ${theme.border}` }}>{money(r.amount)}</td>
+                    <td style={{ padding: '12px 10px', fontSize: 12, color: theme.text2, borderBottom: `1px solid ${theme.border}` }} title={new Date(r.created_at).toLocaleString('en-LK')}>{new Date(r.created_at).toLocaleString('en-LK')}</td>
+                    <td style={{ padding: '12px 10px', fontSize: 12, color: theme.text2, borderBottom: `1px solid ${theme.border}` }}>{r.action_by || '-'}</td>
                     <td style={{
-                      padding: '12px 16px',
+                      padding: '12px 10px',
                       borderBottom: `1px solid ${theme.border}`,
                       position: 'sticky',
-                      right: 120,
-                      width: 140,
-                      minWidth: 140,
-                      maxWidth: 140,
+                      right: ACTION_COL_WIDTH,
+                      width: STATUS_COL_WIDTH,
+                      minWidth: STATUS_COL_WIDTH,
+                      maxWidth: STATUS_COL_WIDTH,
                       zIndex: 10,
                       background: '#ffffff',
                       borderLeft: `1px solid ${theme.border}`,
                       backgroundClip: 'padding-box'
                     }}><StatusPill status={r.status} /></td>
                     <td className="mc-td-actions" style={{
-                      padding: '12px 16px',
+                      padding: '8px 10px',
                       borderBottom: `1px solid ${theme.border}`,
                       position: 'sticky',
                       right: 0,
-                      width: 120,
-                      minWidth: 120,
-                      maxWidth: 120,
+                      width: ACTION_COL_WIDTH,
+                      minWidth: ACTION_COL_WIDTH,
+                      maxWidth: ACTION_COL_WIDTH,
                       zIndex: 10,
                       background: '#ffffff',
                       borderLeft: `1px solid ${theme.border}`,
                       backgroundClip: 'padding-box'
                     }}>
-                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'nowrap' }}>
                         {canViewRecord && (
                           <button
                             onClick={(e) => { e.stopPropagation(); setSelected(r); }}

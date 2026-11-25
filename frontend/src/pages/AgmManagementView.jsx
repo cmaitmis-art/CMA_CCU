@@ -455,7 +455,13 @@ export default function AgmManagementView({ onBack, onViewMc, canEdit, initialTy
                   const isMeetingHeld = mc.meeting_held || (mc.agm_date && mc.agm_date !== '0000-00-00' && mc.agm_date !== '-');
 
                   return (
-                    <tr key={mc.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                    <tr
+                      key={mc.id}
+                      onClick={() => handleRowViewClick(mc)}
+                      style={{ borderBottom: `1px solid ${theme.border}`, cursor: 'pointer' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = '#f8fafc'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = ''; }}
+                    >
                       <td style={{ padding: '12px 14px', fontWeight: 600, color: theme.navy }}>
                         {mc.new_file_no || mc.file_no || mc.old_file_no || '-'}
                       </td>
@@ -527,7 +533,7 @@ export default function AgmManagementView({ onBack, onViewMc, canEdit, initialTy
                               fontSize: 12.5
                             }}
                             title={agmRecord.document_name}
-                            onClick={() => handleView(mc)}
+                            onClick={(e) => { e.stopPropagation(); handleView(mc); }}
                           >
                             <i className="fas fa-file-pdf" style={{ marginRight: 5, flexShrink: 0, color: theme.red }} />
                             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -540,7 +546,7 @@ export default function AgmManagementView({ onBack, onViewMc, canEdit, initialTy
                       <td style={{ padding: '12px 14px', textAlign: 'right' }}>
                         <div style={{ display: 'flex', gap: 3, justifyContent: 'flex-end', alignItems: 'center' }}>
                           <button
-                            onClick={() => handleRowViewClick(mc)}
+                            onClick={(e) => { e.stopPropagation(); handleRowViewClick(mc); }}
                             style={{ ...btnOutline, padding: '5px 7px', fontSize: 12 }}
                             title="View Record Details"
                           >
@@ -548,7 +554,7 @@ export default function AgmManagementView({ onBack, onViewMc, canEdit, initialTy
                           </button>
 
                           <button
-                            onClick={() => handlePrintClick(mc)}
+                            onClick={(e) => { e.stopPropagation(); handlePrintClick(mc); }}
                             style={{ ...btnOutline, padding: '5px 7px', fontSize: 12, background: theme.bg }}
                             title="Generate AGM Letter"
                           >
@@ -557,7 +563,7 @@ export default function AgmManagementView({ onBack, onViewMc, canEdit, initialTy
 
                           {/* NEW: Record AGM Meeting Button */}
                           <button
-                            onClick={() => handleOpenMeetingModal(mc)}
+                            onClick={(e) => { e.stopPropagation(); handleOpenMeetingModal(mc); }}
                             style={{
                               ...btnOutline,
                               padding: '5px 7px',
@@ -573,7 +579,7 @@ export default function AgmManagementView({ onBack, onViewMc, canEdit, initialTy
 
                           {canEdit && (
                             <button
-                              onClick={() => handleUploadClick(mc)}
+                              onClick={(e) => { e.stopPropagation(); handleUploadClick(mc); }}
                               style={{ ...btnOutline, padding: '5px 7px', fontSize: 12 }}
                               title={hasDoc ? 'Update AGM Document' : 'Upload AGM Document'}
                             >
@@ -584,7 +590,7 @@ export default function AgmManagementView({ onBack, onViewMc, canEdit, initialTy
                           {hasDoc && (
                             <>
                               <button
-                                onClick={() => handleView(mc)}
+                                onClick={(e) => { e.stopPropagation(); handleView(mc); }}
                                 style={{ ...btnOutline, padding: '5px 7px', fontSize: 12, background: theme.bg }}
                                 title="View Document (Original)"
                               >
@@ -592,7 +598,7 @@ export default function AgmManagementView({ onBack, onViewMc, canEdit, initialTy
                               </button>
                               {canEdit && (
                                 <button
-                                  onClick={() => handleDelete(mc)}
+                                  onClick={(e) => { e.stopPropagation(); handleDelete(mc); }}
                                   style={{ ...btnDanger, padding: '5px 7px', fontSize: 12 }}
                                   title="Delete Document"
                                 >

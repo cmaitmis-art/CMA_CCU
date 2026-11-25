@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { hasPermission } from '../utils/roleLabel.js';
 import * as XLSX from 'xlsx';
 import { useConfirmDialog } from '../ConfirmDialogContext.jsx';
@@ -9,6 +9,7 @@ import StatusPill from '../components/StatusPill.jsx';
 import { useAutoRefresh } from '../utils/useAutoRefresh';
 import { exportToPdfPrint } from '../utils/pdfExport';
 import { MONTH_OPTIONS, getYearFilterOptions } from '../utils/filterConstants';
+import { useFitColumnsToStatus } from '../utils/tableColumnFit.js';
 import '../components/mc-management/MCManagement.css';
 window.XLSX = XLSX;
 
@@ -35,6 +36,7 @@ import {
   cellStyle,
   tdCheckStyle,
   COL_WIDTHS,
+  COMPLAINTS_COLUMN_SPECS,
   CATEGORIES_BY_SECTION,
   ALL_CATEGORIES,
   STATUS_OPTIONS,
@@ -143,16 +145,37 @@ export default function Complaints({ currentUser, onNavigate }) {
   // MC NO link popup state: { mcNo, x, y }
   const [mcLinkPopup, setMcLinkPopup] = useState(null);
   const confirm = useConfirmDialog();
+  const tableWrapperRef = useRef(null);
+  const { widthsByKey: fittedWidths, totalWidth } = useFitColumnsToStatus(
+    tableWrapperRef,
+    COMPLAINTS_COLUMN_SPECS,
+    [complaints.length, loading, isZoomed]
+  );
 
-  // Navigate to MC or M.Com Management with mc_no pre-filled as search term
+  // Navigate to MC or M.Com Management with mc_no pre-filled as search term and auto-open details form
   function handleMcNoNavigate(mcNo, page) {
     if (!mcNo || !onNavigate) return;
+    const targetPage = page === 'mc' ? 'mc' : 'mcom';
+    const isAdmin = String(currentUser?.role || '').trim().toLowerCase() === 'admin' || Boolean(currentUser?.isSuperAdmin);
+    if (!isAdmin && !hasPermission(currentUser, targetPage, 'view')) {
+      showToast(
+        targetPage === 'mc'
+          ? 'You do not have permission to view MC Management records'
+          : 'You do not have permission to view M.Com Management records',
+        'error'
+      );
+      setMcLinkPopup(null);
+      return;
+    }
+
     const trimmed = String(mcNo).trim();
-    if (page === 'mc') {
+    if (targetPage === 'mc') {
       localStorage.setItem('cma_mc_navigate_search', trimmed);
+      localStorage.setItem('cma_mc_navigate_open', trimmed);
       onNavigate('mc');
     } else {
       localStorage.setItem('cma_mcom_navigate_search', trimmed);
+      localStorage.setItem('cma_mcom_navigate_open', trimmed);
       onNavigate('mcom');
     }
     setMcLinkPopup(null);
@@ -974,17 +997,29 @@ export default function Complaints({ currentUser, onNavigate }) {
           </div>
 
           {/* Table — MC Management pattern: colgroup, sticky header, sticky actions, maxHeight scroll */}
-          <div style={tableWrapperStyle}>
-            <table style={tableStyle}>
+          <div ref={tableWrapperRef} className="mc-table-wrapper" style={tableWrapperStyle}>
+            <table className="mc-table" style={{ ...tableStyle, minWidth: totalWidth }}>
               <colgroup>
                 {Object.keys(COL_WIDTHS).map((h) => (
-                  <col key={h} style={{ width: COL_WIDTHS[h] }} />
+                  <col key={h} style={{ width: fittedWidths[h] ?? COL_WIDTHS[h] }} />
                 ))}
               </colgroup>
               <thead>
                 <tr>
                   {Object.keys(COL_WIDTHS).map((label) => (
-                    <th key={label} style={label === 'ACTIONS' ? thActionsStyle : label === 'STATUS' ? thStatusStyle : thStyle}>{label}</th>
+                    <th
+                      key={label}
+                      className={label === 'ACTIONS' ? 'mc-th-actions' : label === 'STATUS' ? 'mc-th-status' : ''}
+                      style={
+                        label === 'ACTIONS'
+                          ? thActionsStyle
+                          : label === 'STATUS'
+                            ? thStatusStyle
+                            : { ...thStyle, width: fittedWidths[label] ?? COL_WIDTHS[label] }
+                      }
+                    >
+                      {label}
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -1000,23 +1035,24 @@ export default function Complaints({ currentUser, onNavigate }) {
                     return (
                       <tr
                         key={cf.id}
-                        style={{ borderBottom: `1px solid ${theme.border}`, background: isPending ? '#fffbeb' : 'transparent' }}
+                        onClick={() => { setSelectedRecord(cf); setShowViewModal(true); }}
+                        style={{ borderBottom: `1px solid ${theme.border}`, background: isPending ? '#fffbeb' : 'transparent', cursor: 'pointer' }}
                         onMouseEnter={(e) => (e.currentTarget.style.background = isPending ? '#fef3c7' : '#f8fafc')}
                         onMouseLeave={(e) => (e.currentTarget.style.background = isPending ? '#fffbeb' : '')}
                       >
                         <td style={{ ...cellStyle, color: isPending ? theme.orange : theme.text, fontWeight: 500 }} title={cf.serial_no}>{cf.serial_no}</td>
                         <td style={cellStyle} title={formatDisplayDate(cf.letter_date)}>{formatDisplayDate(cf.letter_date)}</td>
                         <td style={cellStyle} title={formatDisplayDate(cf.received_ccu)}>{formatDisplayDate(cf.received_ccu)}</td>
-                        <td style={cellStyle} title={cf.mc_no ? `Click to find "${cf.mc_no}" in MC Management or M.Com` : ''}>
+                        <td style={cellStyle} title={cf.mc_no ? `Click to open "${cf.mc_no}" in MC Management or M.Com` : ''}>
                           {cf.mc_no ? (
                             <span
                               onClick={(e) => {
                                 e.stopPropagation();
-                                const mcLower = (cf.mc_no || '').toLowerCase();
-                                if (mcLower.startsWith('m.com')) {
-                                  handleMcNoNavigate(cf.mc_no, 'mcom');
-                                } else if (mcLower.startsWith('mc')) {
-                                  handleMcNoNavigate(cf.mc_no, 'mc');
+                                const mcText = String(cf.mc_no || '').trim();
+                                if (/m\.?\s*com/i.test(mcText)) {
+                                  handleMcNoNavigate(mcText, 'mcom');
+                                } else if (/^mc\b|\/mc\//i.test(mcText)) {
+                                  handleMcNoNavigate(mcText, 'mc');
                                 } else {
                                   const rect = e.currentTarget.getBoundingClientRect();
                                   setMcLinkPopup(mcLinkPopup?.mcNo === cf.mc_no ? null : { mcNo: cf.mc_no, x: rect.left, y: rect.bottom + 4 });
@@ -1060,18 +1096,18 @@ export default function Complaints({ currentUser, onNavigate }) {
                         </td>
                         <td className="mc-td-actions" style={{ ...tdActionsStyle, background: isPending ? '#fffbeb' : '#ffffff' }}>
                           <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-start', alignItems: 'center' }}>
-                            <ActionBtn icon="fas fa-eye" color={theme.blue} title="View" onClick={() => { setSelectedRecord(cf); setShowViewModal(true); }} />
+                            <ActionBtn icon="fas fa-eye" color={theme.blue} title="View" onClick={(e) => { e.stopPropagation(); setSelectedRecord(cf); setShowViewModal(true); }} />
                             {canEdit && (
-                              <ActionBtn icon="fas fa-history" color={theme.text2} title="History" onClick={() => { setSelectedHistoryRecord(cf); setShowHistoryModal(true); }} />
+                              <ActionBtn icon="fas fa-history" color={theme.text2} title="History" onClick={(e) => { e.stopPropagation(); setSelectedHistoryRecord(cf); setShowHistoryModal(true); }} />
                             )}
                             {canEdit && (
-                              <ActionBtn icon="fas fa-edit" color={theme.orange} title="Edit" onClick={() => { setEditingRecord(cf); setShowFormModal(true); }} />
+                              <ActionBtn icon="fas fa-edit" color={theme.orange} title="Edit" onClick={(e) => { e.stopPropagation(); setEditingRecord(cf); setShowFormModal(true); }} />
                             )}
                             {canDelete && (
-                              <ActionBtn icon="fas fa-trash" color={theme.red} title="Delete" onClick={() => handleDeleteRecord(cf.id)} />
+                              <ActionBtn icon="fas fa-trash" color={theme.red} title="Delete" onClick={(e) => { e.stopPropagation(); handleDeleteRecord(cf.id); }} />
                             )}
-                            {canTransfer && cf.status !== 'Closed' && <ActionBtn icon="fas fa-share" color={theme.blue} title="Transfer" onClick={() => { setActionRecord(cf); setShowTransferModal(true); }} />}
-                            {canClose && cf.status !== 'Closed' && <ActionBtn icon="fas fa-check-circle" color={theme.green} title="Close" onClick={() => { setActionRecord(cf); setShowCloseModal(true); }} />}
+                            {canTransfer && cf.status !== 'Closed' && <ActionBtn icon="fas fa-share" color={theme.blue} title="Transfer" onClick={(e) => { e.stopPropagation(); setActionRecord(cf); setShowTransferModal(true); }} />}
+                            {canClose && cf.status !== 'Closed' && <ActionBtn icon="fas fa-check-circle" color={theme.green} title="Close" onClick={(e) => { e.stopPropagation(); setActionRecord(cf); setShowCloseModal(true); }} />}
                           </div>
                         </td>
                       </tr>

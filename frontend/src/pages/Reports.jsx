@@ -1296,7 +1296,7 @@ export default function Reports({ currentUser }) {
     const form = new FormData();
     for (const f of files) form.append('files', f);
     if (currentUser && currentUser.name) {
-      form.append('created_by', currentUser.name);
+      form.append('created_by', currentUser.isSuperAdmin ? 'System' : currentUser.name);
     }
 
     try {

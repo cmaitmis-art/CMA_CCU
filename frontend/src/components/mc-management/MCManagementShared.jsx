@@ -286,20 +286,19 @@ export function StatusPill({ status, renewalStatus, record }) {
   let effectiveStatusStr = status;
   if (record) {
     const currentYear = new Date().getFullYear();
-    const renewalPeriodYear = parseInt(record.renewal_period, 10);
+    const rpMatches = String(record.renewal_period || '').match(/\b(19|20)\d{2}\b/g);
+    const renewalPeriodYear = rpMatches ? parseInt(rpMatches[rpMatches.length - 1], 10) : parseInt(record.renewal_period, 10);
     const renewalVise = String(record.renewal_date_vise || '').toLowerCase().trim();
     const paymentStatus = record.renewal_payment_status;
 
     if (paymentStatus === 'Pending Approval') {
       effectiveStatusStr = 'Pending';
+    } else if (!isNaN(renewalPeriodYear)) {
+      effectiveStatusStr = renewalPeriodYear >= currentYear ? 'Active' : 'Non Active';
     } else if (renewalVise === 'non active' || renewalVise === 'nonactive') {
       effectiveStatusStr = 'Non Active';
-    } else if (paymentStatus === 'Approved') {
+    } else if (renewalVise === 'active') {
       effectiveStatusStr = 'Active';
-    } else if (renewalPeriodYear && renewalPeriodYear >= currentYear) {
-      effectiveStatusStr = 'Active';
-    } else if (renewalPeriodYear && renewalPeriodYear < currentYear) {
-      effectiveStatusStr = 'Non Active';
     }
     // else: no renewal_period → keep raw status from DB
   }
@@ -1286,7 +1285,7 @@ export function normalizeChecklistPayload(checkData = {}) {
 }
 
 export function ApprovalChecklistModal({ record, onClose, onSave, onApprove, onReject, currentUser }) {
-  const isAGM = String(currentUser?.role || '').trim().toUpperCase() === 'AGM';
+  const isAGM = String(currentUser?.role || '').trim().toUpperCase() === 'AGM' || Boolean(currentUser?.isSuperAdmin);
   const [checks, setChecks] = useState(() => buildChecklistRecordFromMc(record));
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState(record.approval_note || '');

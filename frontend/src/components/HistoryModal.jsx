@@ -310,6 +310,47 @@ export default function HistoryModal({ isOpen, onClose, record, theme = defaultT
                             {displayNote}
                           </div>
                         )}
+                        {item.remark && (
+                          <div style={{
+                            fontSize: 12,
+                            color: '#1e3a8a',
+                            background: '#eff6ff',
+                            borderLeft: `3px solid ${theme.blue}`,
+                            padding: '6px 10px',
+                            borderRadius: 6,
+                            marginTop: 6,
+                            lineHeight: '1.4',
+                            whiteSpace: 'pre-wrap',
+                          }}>
+                            <i className="fas fa-comment-alt" style={{ marginRight: 6, color: theme.blue }} />
+                            <strong>Remark:</strong> {item.remark}
+                          </div>
+                        )}
+                        {item.document_path && (
+                          <div style={{ marginTop: 8 }}>
+                            <a
+                              href={`${(import.meta.env.VITE_API_URL ?? '/api').trim().replace(/\/api\/?$/, '')}/${String(item.document_path).replace(/^\/+/, '')}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 6,
+                                padding: '4px 10px',
+                                background: '#f1f5f9',
+                                border: `1px solid ${theme.border}`,
+                                color: theme.blue,
+                                borderRadius: 6,
+                                textDecoration: 'none',
+                                fontSize: 12,
+                                fontWeight: 500,
+                              }}
+                            >
+                              <i className="fas fa-paperclip" />
+                              {item.document_name || 'View Attachment'}
+                            </a>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );

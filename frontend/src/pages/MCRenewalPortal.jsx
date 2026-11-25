@@ -531,16 +531,10 @@ export default function MCRenewalPortal({
 }) {
   const { settings } = useSettings();
 
-  // NEW: Authentication & Dashboard State
-  const [internalCurrentUser, setCurrentUser] = useState(() => {
-    const saved = sessionStorage.getItem("cma_currentUser");
-    try {
-      return saved ? JSON.parse(saved) : null;
-    } catch (e) {
-      return null;
-    }
-  });
-  const activeUser = currentUser || internalCurrentUser;
+  // Public Citizen Portal:
+  // Internal CCU staff and Super Admin sessions must never bleed into the public citizen portal.
+  // The public renewal portal is strictly guest/citizen-facing.
+  const activeUser = currentUser || null;
 
   const [portalView, setPortalView] = useState(
     standalone ? "wizard" : "dashboard",
@@ -643,11 +637,13 @@ export default function MCRenewalPortal({
     try {
       const all = await fetchRenewals();
       setAllRenewals(all);
-      const myRenewals = all.filter(
-        (r) =>
-          r.applicant_name === activeUser?.name ||
-          r.applicant_email === activeUser?.email,
-      );
+      const myRenewals = activeUser
+        ? all.filter(
+            (r) =>
+              r.applicant_name === activeUser?.name ||
+              r.applicant_email === activeUser?.email,
+          )
+        : [];
       setDashboardRenewals(myRenewals);
 
       const savedDraft = await fetchUserDraft(userIdentifier, "cma_draft");
@@ -1182,7 +1178,11 @@ export default function MCRenewalPortal({
                   My Renewals
                 </h2>
                 <p style={{ color: theme.text2, fontSize: 13, margin: 0 }}>
-                  Logged in as: <b>{activeUser?.name || "Guest"}</b>
+                  {activeUser ? (
+                    <>Logged in as: <b>{activeUser.name}</b></>
+                  ) : (
+                    <span>Public Citizen Portal</span>
+                  )}
                 </p>
               </div>
               <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>

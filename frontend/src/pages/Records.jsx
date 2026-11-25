@@ -698,7 +698,8 @@ export default function RecordsPage() {
                   pagedRows.map((row, idx) => (
                     <tr
                       key={row.id ?? idx}
-                      style={{ borderBottom: `1px solid ${theme.border}` }}
+                      onClick={() => { setSelectedRecord(row); setShowViewModal(true); }}
+                      style={{ borderBottom: `1px solid ${theme.border}`, cursor: 'pointer' }}
                       onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = '')}
                     >
@@ -709,7 +710,7 @@ export default function RecordsPage() {
                       ))}
                       <td style={{ ...cellStyle, position: 'sticky', right: 0, background: '#fff', zIndex: 10, borderLeft: '2px solid #94a3b8', boxShadow: '-4px 0 8px rgba(0,0,0,0.06)', backgroundClip: 'padding-box' }}>
                         <button
-                          onClick={() => { setSelectedRecord(row); setShowViewModal(true); }}
+                          onClick={(e) => { e.stopPropagation(); setSelectedRecord(row); setShowViewModal(true); }}
                           style={{ background: 'none', border: 'none', color: theme.blue, cursor: 'pointer', fontSize: 13 }}
                           title="View full record"
                         >
